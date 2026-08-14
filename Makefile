@@ -5,7 +5,7 @@
 # XcodeGen to produce KVoice.xcodeproj, which is generated on demand and
 # never hand-edited or committed (see .gitignore).
 
-.PHONY: build test generate app-build clean
+.PHONY: build test generate app-build release clean
 
 CORE_DIR := Core
 XCODEPROJ := KVoice.xcodeproj
@@ -23,8 +23,12 @@ build:
 # (or a dlopen failure once the module is found). We detect that case at
 # runtime and add the matching -F search path plus the two runtime -rpaths
 # Testing.framework and its lib_TestingInterop.dylib dependency need. Full-Xcode
-# machines have a Platforms/ dir and need no extra flags. Safe to delete this
-# workaround once full Xcode is installed here.
+# machines have a Platforms/ dir and need no extra flags.
+#
+# This machine now has full Xcode, so the workaround is dormant here — the else
+# branch runs. It is kept because `make build` and `make test` are still
+# documented as working on a Command Line Tools-only checkout (the app targets,
+# `app-build` and `release`, do require full Xcode).
 test:
 	@dev="$$(xcode-select -p)"; \
 	if [ -d "$$dev/Library/Developer/Frameworks/Testing.framework" ] && [ ! -d "$$dev/Platforms" ]; then \
@@ -60,7 +64,18 @@ app-build: generate
 	}
 	xcodebuild -project $(XCODEPROJ) -scheme $(SCHEME) -destination 'platform=macOS' build
 
-# Remove build artifacts (SwiftPM .build and the generated Xcode project).
+# Build a signed, Release-configuration KVoice.app into build/release/.
+#
+# `test` runs first, deliberately: a release never ships untested. `generate`
+# then guarantees the project matches project.yml. Identity detection (Developer
+# ID if the keychain has one, ad-hoc otherwise), the codesign pass, and the
+# final .app path report all live in Scripts/release.sh — see the README's
+# "Release builds" section for how to switch identities.
+release: test generate
+	@./Scripts/release.sh
+
+# Remove build artifacts (SwiftPM .build, the generated Xcode project, and the
+# release output tree).
 clean:
 	cd $(CORE_DIR) && swift package clean
-	rm -rf $(XCODEPROJ)
+	rm -rf $(XCODEPROJ) build
