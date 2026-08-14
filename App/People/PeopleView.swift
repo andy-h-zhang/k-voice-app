@@ -80,12 +80,18 @@ struct PeopleView: View {
                 onImport: { enrollment = .clips(for: nil) }
             )
         } else {
+            // No `idealWidth`, and minimums low enough to fit inside the
+            // window's own floor: this split view's preferred width used to be
+            // the widest thing in the app (200 + 380 + the sidebar), so
+            // selecting People both resized the window and set the effective
+            // limit on how narrow it could ever be made again.
             HSplitView {
                 list(selection: $model.selection)
-                    .frame(minWidth: 200, idealWidth: 240, maxWidth: 340)
+                    .frame(minWidth: 180, maxWidth: 340)
                 detail
-                    .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

@@ -113,13 +113,16 @@ Deliberate choices:
 
 ```
 ~/Documents/KVoice/                     # configurable root
-└── 2026-08-13 Standup/                 # folderName = sanitized title (unique-suffixed)
-    ├── 2026-08-13 Standup.m4a
-    ├── transcript.raw.json             # verbatim AssemblyAI response
-    └── exports: 2026-08-13 Standup.md / .txt / .docx (on demand)
+├── 2026-08-13 Standup/                 # folderName = sanitized title (unique-suffixed)
+│   ├── 2026-08-13 Standup.m4a
+│   └── transcript.raw.json             # verbatim AssemblyAI response
+└── Transcripts/                        # reserved name, created on demand
+    └── 2026-08-13 Standup.md / .txt / .docx
 ```
 
-Rename = sanitize new title → rename folder, `.m4a`, and existing exports via FileManager → update `folderName` in DB only after the FS operations succeed (rollback on partial failure). Collisions get ` 2`, ` 3` suffixes. SwiftData IDs, not paths, are the stable identity.
+Rendered exports live in one shared `Transcripts/` folder rather than inside each recording's folder (changed after first-use feedback: a user looking for "the transcript of Tuesday's standup" should open one place, and the File menu can point at it). The raw JSON stays beside the audio — it is re-processing input, not a document. `Exporter` remains destination-agnostic; the default destination is app-level wiring in `TranscriptExport.destination(inLibraryRoot:)`.
+
+Rename = sanitize new title → rename folder, `.m4a`, base-named siblings, **and this recording's files in `Transcripts/`** via FileManager → update `folderName` in DB only after the FS operations succeed (rollback on partial failure, folder move included). Collisions get ` 2`, ` 3` suffixes, and the uniqueness probe checks `Transcripts/` too, since one shared folder means two recordings can want one filename. Delete trashes the recording's exports alongside its folder. SwiftData IDs, not paths, are the stable identity.
 
 ---
 

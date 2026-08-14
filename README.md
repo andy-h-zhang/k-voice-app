@@ -53,6 +53,27 @@ The script signs nested code inside-out and the bundle last, rather than using
 `codesign --deep` (which re-signs nested code with the *outer* bundle's
 entitlements). `--deep` is used only for verification.
 
+## Where files live
+
+The library is plain folders, not a bundle — everything is grabbable in Finder,
+and the app's **File** menu points at both halves of it:
+
+```
+~/Documents/KVoice/                 # configurable in Settings → Storage
+├── 2026-08-13 Standup/             # one folder per recording
+│   ├── 2026-08-13 Standup.m4a
+│   └── transcript.raw.json         # verbatim provider response
+├── Transcripts/                    # every rendered export, created on demand
+│   └── 2026-08-13 Standup.md
+└── KVoice.store                    # the SwiftData database
+```
+
+Rendered exports (`.md`, `.txt`, `.docx`) share one `Transcripts/` folder rather
+than sitting inside each recording's folder, so there is a single place to look
+for readable transcripts. Renaming a recording renames its exports there too;
+deleting one trashes them with it. A backup of the root is a backup of
+everything.
+
 ## AssemblyAI API key
 
 Transcription needs an AssemblyAI API key. **Placeholder — no key is configured yet.** When you have one:

@@ -60,7 +60,9 @@ Each profile stores name, embeddings, and optionally the source clips. Profiles 
 
 - Library lists recordings with title, date, duration, transcription status, and detected participants
 - Inline rename edits the title and renames the underlying audio file and export baseline name to match (sanitize illegal filename characters)
-- Files live in a user-visible folder (default `~/Documents/<AppName>/`, configurable), one subfolder per recording containing the `.m4a` and exports — not an opaque bundle, so files are grabbable in Finder
+- Files live in a user-visible folder (default `~/Documents/<AppName>/`, configurable), one subfolder per recording containing the `.m4a` and its raw `transcript.raw.json` — not an opaque bundle, so files are grabbable in Finder
+- Rendered exports do **not** sit beside the audio: every `.md`/`.txt`/`.docx` goes into one shared `<root>/Transcripts/` folder, created on demand, so there is a single place to find readable transcripts (revised after first-use feedback; the File menu points at both folders)
+- Every recording can be opened from the library — double-click, the row's disclosure control, or the context menu — including one with no transcript yet, which opens the player plus a "no transcript yet" state
 
 Transcript editor:
 
@@ -80,6 +82,7 @@ Per recording:
 - **Word `.docx`** — speaker names bold, timestamps subdued; generate the OOXML directly (a docx is a zip of XML; no heavyweight dependency needed). Must open cleanly in Word and import into Google Docs
 - "Reveal in Finder" and drag-out of both audio and transcript
 - Filenames follow the recording title
+- Every rendered export lands in `<library root>/Transcripts/`, whichever way it was triggered (editor toolbar, library row menu, drag-out). Re-exporting overwrites; renaming a recording renames its exports there too, in the same rolled-back transaction as its folder
 
 ## Settings
 

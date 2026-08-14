@@ -16,8 +16,10 @@ struct RecordingRowView: View {
     @Binding var editingID: UUID?
     @Binding var draftTitle: String
     let onRequestDelete: (LibraryRow) -> Void
-    /// Pushes the Phase-5 transcript editor for this recording.
-    let onOpenTranscript: (LibraryRow) -> Void
+    /// Pushes the recording's detail screen — the transcript editor when there
+    /// is a transcript, the player and a "no transcript yet" state when there
+    /// is not. Every row can be opened.
+    let onOpen: (LibraryRow) -> Void
 
     @Environment(AppServices.self) private var services
     @FocusState private var titleFocused: Bool
@@ -56,18 +58,56 @@ struct RecordingRowView: View {
 
             audioDragHandle
 
+            finderButton
+
             StatusBadge(status: status, detail: services.jobStatus.detail(for: row.id))
 
             primaryAction
+
+            openButton
         }
         .padding(.vertical, 6)
         .contentShape(Rectangle())
-        // Double-click opens the transcript, as every other macOS library does.
-        .onTapGesture(count: 2) {
-            guard hasTranscript else { return }
-            onOpenTranscript(row)
-        }
+        // Double-click opens the recording, as every other macOS library does.
+        // Unconditionally: an untranscribed recording still has audio to play,
+        // and a row that silently ignores a double-click reads as broken.
+        .onTapGesture(count: 2) { onOpen(row) }
         .contextMenu { menu }
+    }
+
+    /// The always-visible way to find this recording on disk.
+    ///
+    /// Persistent rather than hover-revealed, and next to the drag handle it
+    /// pairs with: "where is this file?" was the first question a real user
+    /// asked, and the answer was buried in a context menu nobody opens. It is
+    /// styled as a secondary control so a list of twenty rows does not read as
+    /// twenty buttons.
+    private var finderButton: some View {
+        Button {
+            FinderIntegration.reveal(row.folderURL)
+        } label: {
+            Image(systemName: "folder")
+                .font(.callout)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help("Show this recording's folder in Finder — \(row.folderURL.path)")
+        .accessibilityLabel("Show in Finder")
+    }
+
+    /// The disclosure affordance every macOS list that pushes a detail screen
+    /// carries. Enabled for every row, transcript or not.
+    private var openButton: some View {
+        Button {
+            onOpen(row)
+        } label: {
+            Image(systemName: "chevron.right")
+                .font(.callout)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help(hasTranscript ? "Open the transcript editor." : "Open this recording to play it.")
+        .accessibilityLabel("Open recording")
     }
 
     /// Drag-out of the audio (spec §Export), on a grab handle rather than the
@@ -158,10 +198,9 @@ struct RecordingRowView: View {
                 .help(retryHelp)
 
         default:
-            if hasTranscript {
-                Button("Transcript") { onOpenTranscript(row) }
-                    .help("Open the transcript editor.")
-            }
+            // Nothing: the trailing chevron opens this row, and it is there for
+            // every row rather than only the transcribed ones.
+            EmptyView()
         }
     }
 
@@ -174,8 +213,10 @@ struct RecordingRowView: View {
 
     @ViewBuilder
     private var menu: some View {
-        Button("Open Transcript") { onOpenTranscript(row) }
-            .disabled(!hasTranscript)
+        // Never disabled: without a transcript this opens the player and the
+        // "no transcript yet" state, which is exactly what someone with no API
+        // key needs to reach.
+        Button(hasTranscript ? "Open Transcript" : "Open Recording") { onOpen(row) }
 
         Button("Rename…") { beginRename() }
 

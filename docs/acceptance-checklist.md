@@ -69,12 +69,16 @@ criterion; **[P2]**–**[P7]** = a visual check that phase's work left behind.
 - [ ] Rename a recording inline in the library. **[Spec]**
 - [ ] In Finder, the folder **and** the `.m4a` inside it both took the new
       name. **[Spec]** — this is the "renaming renames files on disk" criterion.
+- [ ] If that recording had been exported, its files in `Transcripts/` took the
+      new name too, and no other recording's exports moved.
 - [ ] Rename to something with illegal characters (`Q3/Q4: plan?`): the title
       shows as typed, the folder name is sanitized, nothing breaks. **[P2]**
 - [ ] Rename a second recording to the *same* title: it gets a " 2" suffix on
       disk rather than colliding. **[P2]**
 - [ ] **Move to Trash…** removes the row and puts the folder in the Trash
       (recoverable — check the Trash). **[P4]**
+- [ ] That recording's exports in `Transcripts/` went to the Trash with it, and
+      nobody else's did.
 
 ## D. Settings walkthrough — [P6]
 
@@ -92,8 +96,9 @@ criterion; **[P2]**–**[P7]** = a visual check that phase's work left behind.
 - [ ] **Default format:** switch it; the editor's Export menu's first item
       changes to match ("Export as …").
 - [ ] **Library folder → Move…:** pick a new empty folder, confirm **Move
-      Library Here**. Every recording folder moves with it (check Finder), and
-      the app says it needs a relaunch to finish.
+      Library Here**. Every recording folder — and the `Transcripts/` folder —
+      moves with it (check Finder), and the app says it needs a relaunch to
+      finish.
 - [ ] Relaunch: the library is intact at the new location, recordings still
       play, and nothing was left behind but an empty old folder.
 - [ ] Try moving into a folder that already has files: it is refused with an
@@ -179,8 +184,11 @@ voice**.
 For one finished, speaker-named recording, export all three formats:
 
 - [ ] **Export as …** (the default-format item) matches your Settings choice. **[P7]**
-- [ ] Markdown, plain text, and `.docx` all land in the recording's folder,
-      named after the recording title. **[Spec]**
+- [ ] Markdown, plain text, and `.docx` all land in `~/Documents/KVoice/Transcripts/`,
+      named after the recording title — *not* in the recording's own folder,
+      which keeps only the `.m4a` and `transcript.raw.json`. **[Spec]**
+- [ ] The `Transcripts/` folder did not exist before the first export and was
+      created by it.
 - [ ] Markdown: `## Name — [hh:mm:ss]` headers, readable paragraphs. **[Spec]**
 - [ ] Plain text: same structure, no markup. **[Spec]**
 - [ ] **The `.docx` opens cleanly in Microsoft Word** — speaker names bold,
@@ -189,11 +197,15 @@ For one finished, speaker-named recording, export all three formats:
       (upload to Drive → Open with Google Docs). **[Spec] [P7]**
 - [ ] All three contain your *edited* text, not the original API text. **[P5]**
 - [ ] **Reveal in Finder** / the magnifying-glass button opens the right
-      folder. **[P7]**
+      folder: the recording's own folder for the audio chip, `Transcripts/`
+      (or the exported file itself, after an export) for the transcript
+      chip. **[P7]**
 - [ ] **Drag the audio out** of the app into Finder or Mail — the `.m4a`
       arrives. **[P7]**
-- [ ] **Drag the transcript out** — it exports into the recording's folder
-      first, then drags, as the tooltip says. **[P7]**
+- [ ] **Drag the transcript out** — it exports into `Transcripts/` first, then
+      drags, as the tooltip says. **[P7]**
+- [ ] **File ▸ Show Transcripts in Finder** opens that same folder, and
+      **File ▸ Show Recordings in Finder** opens the library root above it.
 
 ## I. The acceptance recordings — [Spec]
 
@@ -228,6 +240,34 @@ swift build --package-path Core -c release
       confirm the shipped default (0.62) still looks right for *your* voices,
       and adjust Settings → Similarity threshold if the sweep says otherwise.
       **[P1]** — this is the open item from Phase 1b.
+
+---
+
+## K. First-use QA round — [QA1]
+
+The four things a first real user hit on day one. Worth re-walking after any
+change to the library row, the detail screen, or the window's layout.
+
+- [ ] **With no API key configured**, double-click an untranscribed recording:
+      it opens, the transport bar at the bottom is enabled, and it plays.
+- [ ] The same recording opens from the trailing **›** control and from the
+      context menu's **Open Recording**. All three work on every row.
+- [ ] The middle of that screen says **No Transcript Yet**, explains that the
+      audio can still be played, and offers **Open Settings…** (no key) or
+      **Transcribe** (key present).
+- [ ] Every library row shows a **folder** button that reveals that recording's
+      folder in Finder, without opening a context menu.
+- [ ] The **path footer** under the list shows `~/Documents/KVoice` (or wherever
+      the library is), is visible in the empty state too, and opens Finder when
+      clicked.
+- [ ] **File ▸ Show Recordings in Finder** and **File ▸ Show Transcripts in
+      Finder** both work from every sidebar section, including Record.
+- [ ] Resize the window very wide, very tall, and very small. It resizes freely
+      in both axes and stops only at a sane minimum.
+- [ ] Switch Record → Recordings → People → Record. The window keeps the size
+      you gave it at every step — no snap back to the default.
+- [ ] Resize, quit, relaunch: the window comes back the size and position you
+      left it.
 
 ---
 

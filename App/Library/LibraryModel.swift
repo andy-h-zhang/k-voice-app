@@ -121,9 +121,10 @@ final class LibraryModel {
     /// Renames a recording on disk, then in the database.
     ///
     /// Filesystem first (plan §3 decision 6): `RecordingStore.rename` moves the
-    /// folder, the `.m4a`, the raw transcript, and any exports, rolling back if
-    /// any step fails. Only once that has succeeded does the row change, so
-    /// Finder and the library can never disagree.
+    /// folder, the `.m4a`, the raw transcript, *and* this recording's rendered
+    /// exports in the shared `Transcripts/` folder, rolling back if any step
+    /// fails. Only once that has succeeded does the row change, so Finder and
+    /// the library can never disagree.
     func rename(id: UUID, to newTitle: String) {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -148,18 +149,30 @@ final class LibraryModel {
 
     // MARK: - Deleting
 
-    /// Moves the recording's folder to the Trash and removes its row.
+    /// Moves the recording's folder — and its rendered exports — to the Trash,
+    /// and removes its row.
     ///
     /// The Trash rather than an unlink, because the folder holds the only copy
     /// of the audio — a misclick has to be recoverable.
+    ///
+    /// The exports live in the shared `Transcripts/` folder rather than inside
+    /// the recording's own, so trashing the folder no longer takes them with
+    /// it. They are trashed explicitly, and best-effort: a transcript that
+    /// cannot be trashed (already gone, permissions) must not strand the
+    /// recording itself, and the audio is the copy that matters.
     func moveToTrash(id: UUID) {
         do {
             let context = ModelContext(container)
             guard let recording = try context.recording(id: id) else { return }
 
-            let folderURL = recording.folder(inRoot: root).folderURL
+            let folder = recording.folder(inRoot: root)
+            let folderURL = folder.folderURL
             if FileManager.default.fileExists(atPath: folderURL.path) {
                 try FileManager.default.trashItem(at: folderURL, resultingItemURL: nil)
+            }
+
+            for export in (try? store.transcriptExports(forBaseName: folder.baseName)) ?? [] {
+                try? FileManager.default.trashItem(at: export, resultingItemURL: nil)
             }
 
             context.delete(recording)

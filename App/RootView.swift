@@ -28,14 +28,22 @@ struct RootView: View {
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
         } detail: {
-            switch navigation.section {
-            case .record, .none:
-                RecordView()
-            case .recordings:
-                LibraryView()
-            case .people:
-                PeopleView()
+            Group {
+                switch navigation.section {
+                case .record, .none:
+                    RecordView()
+                case .recordings:
+                    LibraryView()
+                case .people:
+                    PeopleView()
+                }
             }
+            // Every section fills the detail column, so switching sections
+            // hands AppKit the same layout report rather than a new preferred
+            // size to resize the window to. Without this, a section whose
+            // content has a smaller ideal size drags the window down with it —
+            // the "switching menus resizes the window back to default" bug.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

@@ -4,17 +4,26 @@ import Foundation
 /// One recording's folder on disk.
 ///
 /// ```
-/// <root>/2026-08-13 Standup/          ← folderURL   (name == baseName)
-///        ├── 2026-08-13 Standup.m4a   ← audioURL
-///        ├── transcript.raw.json      ← written in Phase 3
-///        └── 2026-08-13 Standup.md    ← exports, Phase 7
+/// <root>/
+/// ├── 2026-08-13 Standup/             ← folderURL   (name == baseName)
+/// │   ├── 2026-08-13 Standup.m4a      ← audioURL
+/// │   └── transcript.raw.json         ← verbatim provider response
+/// └── Transcripts/                    ← RecordingStore.transcriptsFolderURL
+///     └── 2026-08-13 Standup.md       ← rendered exports (.md/.txt/.docx)
 /// ```
+///
+/// Rendered exports deliberately do **not** live here: they share one
+/// `Transcripts/` folder at the library root so a user has a single place to
+/// look for readable transcripts (see ``RecordingStore/transcriptsFolderURL``).
+/// The raw response stays beside the audio, because it is the recording's own
+/// re-processing input rather than a document.
 public struct RecordingFolder: Sendable, Equatable, Identifiable {
     public var id: URL { folderURL }
 
     /// The recording's folder.
     public let folderURL: URL
-    /// Filename stem shared by the audio file and every export.
+    /// Filename stem shared by the audio file, the raw transcript, and the
+    /// recording's rendered exports over in `Transcripts/`.
     public let baseName: String
     /// Extension of the audio file, without the dot.
     public let audioFileExtension: String
@@ -30,7 +39,8 @@ public struct RecordingFolder: Sendable, Equatable, Identifiable {
         fileURL(withExtension: audioFileExtension)
     }
 
-    /// A sibling file sharing the base name, e.g. the `.md` export.
+    /// A sibling file sharing the base name, e.g. `transcript.raw.json`'s
+    /// title-named cousins.
     public func fileURL(withExtension pathExtension: String) -> URL {
         folderURL.appendingPathComponent("\(baseName).\(pathExtension)")
     }
@@ -59,6 +69,72 @@ public struct RecordingStore: Sendable {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
         return documents.appendingPathComponent(appName, isDirectory: true)
+    }
+
+    // MARK: - Transcripts folder
+
+    /// The one folder holding every rendered export.
+    ///
+    /// A reserved name under the library root, so it is a sibling of the
+    /// recording folders rather than inside one. ``recordings()`` skips it by
+    /// name and never reports it as a recording.
+    public static let transcriptsFolderName = "Transcripts"
+
+    /// `<root>/Transcripts`, for callers that only have a root URL.
+    public static func transcriptsFolderURL(inLibraryRoot root: URL) -> URL {
+        root.appendingPathComponent(transcriptsFolderName, isDirectory: true)
+    }
+
+    /// Where every rendered export (`.md`, `.txt`, `.docx`) is written.
+    ///
+    /// One shared folder rather than one file per recording folder: a user
+    /// looking for "the transcript of Tuesday's standup" should find every
+    /// transcript in one place, and the File menu can point at it. The raw
+    /// `transcript.raw.json` stays in the recording's own folder — it is
+    /// re-processing input, not a document.
+    ///
+    /// Created lazily. Nothing creates it at launch, so a library that has
+    /// never exported anything does not grow an empty folder.
+    public var transcriptsFolderURL: URL {
+        Self.transcriptsFolderURL(inLibraryRoot: rootURL)
+    }
+
+    /// Creates the transcripts folder if it does not exist yet.
+    @discardableResult
+    public func createTranscriptsFolderIfNeeded() throws -> URL {
+        let folder = transcriptsFolderURL
+        if operations.fileExists(at: folder) {
+            guard operations.isDirectory(at: folder) else {
+                throw StorageError.notADirectory(path: folder.path)
+            }
+            return folder
+        }
+        do {
+            try operations.createDirectory(at: folder)
+        } catch {
+            throw StorageError.folderCreationFailed(
+                path: folder.path,
+                reason: error.localizedDescription
+            )
+        }
+        return folder
+    }
+
+    /// The rendered exports belonging to one recording, by its base name.
+    ///
+    /// Matches on the `<baseName>.` prefix — the same rule ``rename(_:to:)``
+    /// uses inside the recording's folder — so `.md`, `.txt` and `.docx` are
+    /// all found in one pass without hard-coding the format list. Returns
+    /// nothing when the folder has never been created.
+    public func transcriptExports(forBaseName baseName: String) throws -> [URL] {
+        let folder = transcriptsFolderURL
+        guard operations.fileExists(at: folder), operations.isDirectory(at: folder) else {
+            return []
+        }
+        let prefix = baseName + "."
+        return try operations.contentsOfDirectory(at: folder)
+            .filter { $0.lastPathComponent.hasPrefix(prefix) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     // MARK: - Creating
@@ -127,6 +203,10 @@ public struct RecordingStore: Sendable {
         let entries = try operations.contentsOfDirectory(at: rootURL)
         let folders: [RecordingFolder] = try entries.compactMap { entry in
             guard operations.isDirectory(at: entry) else { return nil }
+            // Reserved: exports, not a recording. It holds no audio today, so
+            // this is belt-and-braces — but a user dropping an `.m4a` in there
+            // should not conjure a phantom recording called "Transcripts".
+            guard entry.lastPathComponent != Self.transcriptsFolderName else { return nil }
 
             let contents = try operations.contentsOfDirectory(at: entry)
             let audioFiles = contents.filter {
@@ -151,14 +231,22 @@ public struct RecordingStore: Sendable {
 
     // MARK: - Renaming
 
-    /// Renames a recording: its folder, its audio file, and every sibling
-    /// file sharing the base name (exports, raw transcript).
+    /// Renames a recording: its folder, its audio file, every sibling file
+    /// sharing the base name (the raw transcript), and the recording's
+    /// rendered exports over in `Transcripts/`.
     ///
     /// Filesystem first, database second (`docs/implementation-plan.md` §3
     /// decision 6): files are what the user sees, so the caller only updates
     /// its records after this returns. If any move fails, the moves already
     /// made are undone and ``StorageError/renameFailed(from:to:reason:rolledBack:)``
     /// reports whether that undo succeeded.
+    ///
+    /// ## Why the exports are part of the same transaction
+    ///
+    /// `Transcripts/` is shared by every recording, so an export left under
+    /// the old title is not merely untidy — it is indistinguishable from
+    /// another recording's file. The moves therefore join the same
+    /// `completed` list and unwind with everything else, folder move included.
     ///
     /// - Returns: The recording's new location. May carry a collision suffix.
     public func rename(_ folder: RecordingFolder, to newTitle: String) throws -> RecordingFolder {
@@ -172,8 +260,19 @@ public struct RecordingStore: Sendable {
 
         let newBase = FilenameSanitizer.uniqueName(for: sanitized) { candidate in
             // The recording's own folder is not a collision with itself.
-            candidate != currentFolderName
-                && operations.fileExists(at: parent.appendingPathComponent(candidate))
+            if candidate != currentFolderName,
+                operations.fileExists(at: parent.appendingPathComponent(candidate)) {
+                return true
+            }
+            // Nor are its own exports — but *another* recording's exports in
+            // the shared folder are. Suffixing here beats discovering the
+            // clash half-way through the move.
+            if candidate != folder.baseName,
+                let exports = try? transcriptExports(forBaseName: candidate),
+                !exports.isEmpty {
+                return true
+            }
+            return false
         }
 
         guard newBase != folder.baseName || newBase != currentFolderName else {
@@ -184,25 +283,31 @@ public struct RecordingStore: Sendable {
         do {
             // 1. Files inside the folder, before the folder itself: their
             //    URLs are only valid while the folder is where we left it.
-            let prefix = folder.baseName + "."
-            let contents = try operations.contentsOfDirectory(at: folder.folderURL)
-            for url in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                let name = url.lastPathComponent
-                guard name.hasPrefix(prefix) else { continue }
+            //    Skipped when only the folder is being renamed, since moving
+            //    a file onto itself is a collision, not a rename.
+            if newBase != folder.baseName {
+                let prefix = folder.baseName + "."
+                let contents = try operations.contentsOfDirectory(at: folder.folderURL)
+                for url in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                    let name = url.lastPathComponent
+                    guard name.hasPrefix(prefix) else { continue }
 
-                // Keep everything after the base name, so "<base>.raw.json"
-                // and "<base>.m4a" both follow the rename.
-                let remainder = String(name.dropFirst(folder.baseName.count))
-                let destination = folder.folderURL.appendingPathComponent(newBase + remainder)
-                guard !operations.fileExists(at: destination) else {
-                    throw StorageError.destinationExists(path: destination.path)
+                    // Keep everything after the base name, so "<base>.raw.json"
+                    // and "<base>.m4a" both follow the rename.
+                    let remainder = String(name.dropFirst(folder.baseName.count))
+                    let destination = folder.folderURL.appendingPathComponent(newBase + remainder)
+                    guard !operations.fileExists(at: destination) else {
+                        throw StorageError.destinationExists(path: destination.path)
+                    }
+
+                    try operations.moveItem(at: url, to: destination)
+                    completed.append((from: url, to: destination))
                 }
-
-                try operations.moveItem(at: url, to: destination)
-                completed.append((from: url, to: destination))
             }
 
-            // 2. The folder.
+            // 2. The folder. Recorded in `completed` because step 3 follows
+            //    it: a rollback has to put the folder back *before* it can
+            //    undo the moves in step 1, which reversed order guarantees.
             var newFolderURL = folder.folderURL
             if newBase != currentFolderName {
                 let destination = parent.appendingPathComponent(newBase, isDirectory: true)
@@ -210,7 +315,23 @@ public struct RecordingStore: Sendable {
                     throw StorageError.destinationExists(path: destination.path)
                 }
                 try operations.moveItem(at: folder.folderURL, to: destination)
+                completed.append((from: folder.folderURL, to: destination))
                 newFolderURL = destination
+            }
+
+            // 3. Rendered exports in the shared `Transcripts/` folder, which
+            //    is at the library root and therefore unmoved by step 2.
+            if newBase != folder.baseName {
+                let transcripts = transcriptsFolderURL
+                for url in try transcriptExports(forBaseName: folder.baseName) {
+                    let remainder = String(url.lastPathComponent.dropFirst(folder.baseName.count))
+                    let destination = transcripts.appendingPathComponent(newBase + remainder)
+                    guard !operations.fileExists(at: destination) else {
+                        throw StorageError.destinationExists(path: destination.path)
+                    }
+                    try operations.moveItem(at: url, to: destination)
+                    completed.append((from: url, to: destination))
+                }
             }
 
             return RecordingFolder(
@@ -232,9 +353,14 @@ public struct RecordingStore: Sendable {
 
     // MARK: - Moving the whole library (Phase 6)
 
-    /// Moves the entire library — every recording folder *and* the SwiftData
-    /// store file beside them — to a new root, and returns a store pointing at
-    /// it (spec §Settings: "Storage folder").
+    /// Moves the entire library — every recording folder, the shared
+    /// `Transcripts/` folder, *and* the SwiftData store file beside them — to a
+    /// new root, and returns a store pointing at it (spec §Settings: "Storage
+    /// folder").
+    ///
+    /// Nothing here enumerates those three by name: every child of the root
+    /// moves, which is why adding `Transcripts/` to the layout needed no
+    /// change to this method.
     ///
     /// ## The semantics, stated honestly
     ///

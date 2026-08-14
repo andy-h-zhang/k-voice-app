@@ -51,7 +51,7 @@ struct LibraryView: View {
                             editingID: $editingID,
                             draftTitle: $draftTitle,
                             onRequestDelete: { pendingDelete = $0 },
-                            onOpenTranscript: { openRecordingID = $0.id }
+                            onOpen: { openRecordingID = $0.id }
                         )
                         .tag(row.id)
                     }
@@ -59,6 +59,9 @@ struct LibraryView: View {
                 .listStyle(.inset)
                 .alternatingRowBackgrounds()
             }
+
+            Divider()
+            storageFooter
         }
         .navigationTitle("Recordings")
         .navigationSubtitle(subtitle)
@@ -107,6 +110,38 @@ struct LibraryView: View {
     private var subtitle: String {
         let count = services.library.rows.count
         return count == 1 ? "1 recording" : "\(count) recordings"
+    }
+
+    /// Where the files are, stated rather than merely reachable.
+    ///
+    /// A path bar under the list rather than only the toolbar's folder button:
+    /// the first thing a real user wanted to know was *where recordings are
+    /// saved*, and an icon offers an action without answering the question. A
+    /// footer answers it at a glance, is present in the empty state too (when
+    /// the question is most likely), and clicking it opens Finder — so it is
+    /// both the answer and the action. Modelled on Finder's own path bar and
+    /// Xcode's status bar; deliberately quiet.
+    private var storageFooter: some View {
+        Button {
+            FinderIntegration.open(services.libraryRoot)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                Text(Display.friendlyPath(services.libraryRoot))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Spacer(minLength: 0)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(.bar)
+        .help("Recordings are saved here. Click to open \(services.libraryRoot.path) in Finder.")
+        .accessibilityLabel("Recordings folder: \(services.libraryRoot.path). Opens in Finder.")
     }
 
     private var emptyState: some View {

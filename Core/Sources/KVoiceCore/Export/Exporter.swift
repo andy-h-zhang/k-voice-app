@@ -8,14 +8,20 @@ import Foundation
 ///
 /// Filenames follow the recording title (`docs/spec.md` §Export), sanitized by
 /// ``FilenameSanitizer`` — the same function that names the recording's folder
-/// and `.m4a`, so an export sits beside its audio under a matching name.
+/// and `.m4a`, so an export carries the same name as the audio it came from.
+///
+/// The destination is the caller's choice and always has been: this type knows
+/// nothing about the library layout. The app writes into
+/// ``RecordingStore/transcriptsFolderURL``; a test or a CLI can write anywhere.
 public enum Exporter {
 
     /// What to do when the destination already holds a file of that name.
     public enum CollisionPolicy: Sendable {
         /// Replace it. The default: an export is a regenerated artifact of the
-        /// transcript, and re-exporting into the recording's own folder should
-        /// refresh the file rather than pile up ` 2`, ` 3` copies.
+        /// transcript, so re-exporting after an edit should refresh the file
+        /// rather than pile up ` 2`, ` 3` copies. Safe in the app's shared
+        /// `Transcripts/` folder because `RecordingStore.rename` keeps one base
+        /// name per recording there — two recordings cannot hold one filename.
         case overwrite
         /// Keep both, adding a ` 2`, ` 3`, … suffix. For exports into a folder
         /// the app does not own, where an existing file may be unrelated.

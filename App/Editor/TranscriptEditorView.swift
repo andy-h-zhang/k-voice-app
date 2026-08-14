@@ -35,12 +35,22 @@ struct TranscriptEditorScreen: View {
     }
 }
 
-/// The transcript editor (spec §Library and editor, plan §2 Phase 5).
+/// The recording detail screen (spec §Library and editor, plan §2 Phase 5).
 ///
 /// Turns with `Speaker — [hh:mm:ss]` headers, paragraphs that edit in place,
 /// synced playback along the bottom, and every speaker operation the spec asks
 /// for. The grouping is `TranscriptDocument`'s, so what is on screen is exactly
 /// what an export produces.
+///
+/// ## It opens for recordings with no transcript, too
+///
+/// The transport bar and the audio it drives are outside the
+/// transcript/empty-state branch, and always have been — but the library only
+/// offered a way in once utterances existed, which with no API key configured
+/// is *never*. So the app had a player nobody could reach and recordings
+/// nobody could listen to. Opening is now unconditional; the middle of the
+/// screen explains the missing transcript and offers the thing that would fix
+/// it, while the bottom of the screen plays the audio.
 struct TranscriptEditorView: View {
 
     let model: TranscriptEditorModel
@@ -151,7 +161,7 @@ struct TranscriptEditorView: View {
                     title: "\(model.title).\(defaultFormat.fileExtension)",
                     systemImage: "doc.text",
                     help: "Drag out a \(defaultFormat.displayName) transcript. "
-                        + "Dragging exports it into the recording's folder first."
+                        + "Dragging exports it into your Transcripts folder first."
                 ) {
                     // The drag renders from the database, so anything still
                     // sitting in the debounce has to land first — otherwise the
@@ -166,8 +176,13 @@ struct TranscriptEditorView: View {
                     )
                 } reveal: {
                     // The folder rather than the file: an export may not have
-                    // been written yet, and the folder is where it will land.
-                    FinderIntegration.reveal(lastExport ?? model.folderURL)
+                    // been written yet, and the shared Transcripts folder is
+                    // where it will land.
+                    if let lastExport {
+                        FinderIntegration.reveal(lastExport)
+                    } else {
+                        FinderIntegration.openTranscriptsFolder(inLibraryRoot: services.libraryRoot)
+                    }
                 }
                 .disabled(model.isEmpty)
 
@@ -232,13 +247,50 @@ struct TranscriptEditorView: View {
         }
     }
 
+    /// What an untranscribed recording shows — which, with no API key
+    /// configured, is *every* recording.
+    ///
+    /// This screen is reachable for any recording precisely so that the audio
+    /// can be played, so the state says that first: the transport along the
+    /// bottom is live and loaded whether or not a transcript exists. The
+    /// action is whatever actually unblocks the user — transcribe if a key is
+    /// configured, Settings if not — rather than a dead end telling them to go
+    /// somewhere else and do something the app could do here.
     private var emptyState: some View {
         ContentUnavailableView {
             Label("No Transcript Yet", systemImage: "text.bubble")
         } description: {
-            Text("Transcribe this recording from the library to edit its speakers and text.")
+            Text(emptyStateDescription)
+        } actions: {
+            if isTranscribing {
+                ProgressView().controlSize(.small)
+            } else if services.hasAPIKey {
+                Button("Transcribe") { services.transcription.enqueue(model.recordingID) }
+                    .buttonStyle(.borderedProminent)
+                    .help("Upload this recording and identify its speakers.")
+            } else {
+                SettingsLink { Text("Open Settings…") }
+                    .buttonStyle(.borderedProminent)
+            }
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private var isTranscribing: Bool {
+        services.jobStatus.running.contains(model.recordingID)
+    }
+
+    private var emptyStateDescription: String {
+        if isTranscribing {
+            return "Transcribing now. You can play the recording while you wait — "
+                + "the transcript appears here when it lands."
+        }
+        if services.hasAPIKey {
+            return "Play the recording with the controls below, or transcribe it to "
+                + "edit its speakers and text."
+        }
+        return "Play the recording with the controls below. Add your AssemblyAI key "
+            + "in Settings to transcribe it — the audio is already saved either way."
     }
 
     // MARK: - Toolbar
@@ -279,7 +331,11 @@ struct TranscriptEditorView: View {
             } label: {
                 Label("Reveal in Finder", systemImage: "folder")
             }
-            .help("Show this recording's folder in Finder.")
+            .help(
+                lastExport == nil
+                    ? "Show this recording's folder in Finder."
+                    : "Show the exported transcript in Finder."
+            )
         }
     }
 
@@ -290,9 +346,12 @@ struct TranscriptEditorView: View {
     }
 
     private var subtitle: String {
+        let head = "\(Display.rowDate(model.createdAt)) · \(Display.duration(model.durationSec))"
+        // "0 speakers" is not information — it is the empty state repeating
+        // itself in the title bar.
         let speakers = model.speakers.count
-        return "\(Display.rowDate(model.createdAt)) · \(Display.duration(model.durationSec))"
-            + " · \(speakers) speaker\(speakers == 1 ? "" : "s")"
+        guard speakers > 0 else { return head }
+        return head + " · \(speakers) speaker\(speakers == 1 ? "" : "s")"
     }
 
     private var mergeQuestion: String {
