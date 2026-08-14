@@ -426,13 +426,16 @@ struct ModelContainerTests {
 
     @Test("the in-memory container writes nothing to disk")
     func inMemoryIsIsolated() throws {
-        let first = try KVoiceSchema.inMemory()
+        // Through `TestContainer` rather than `KVoiceSchema` directly: every
+        // container in the suite has to take the same creation lock, or the
+        // serialization has a hole in it. The helper calls straight through.
+        let first = try TestContainer.inMemory()
         let context = ModelContext(first)
         context.insert(Recording(title: "R", folderName: "R", audioFileName: "R.m4a"))
         try context.save()
 
         // A second container is a genuinely separate store.
-        let second = try KVoiceSchema.inMemory()
+        let second = try TestContainer.inMemory()
         #expect(try ModelContext(second).fetch(FetchDescriptor<Recording>()).isEmpty)
         #expect(try ModelContext(first).fetch(FetchDescriptor<Recording>()).count == 1)
     }
@@ -444,7 +447,7 @@ struct ModelContainerTests {
 
         let id: UUID
         do {
-            let container = try KVoiceSchema.onDisk(inLibraryRoot: directory.url)
+            let container = try TestContainer.onDisk(inLibraryRoot: directory.url)
             let context = ModelContext(container)
             let recording = Recording(title: "R", folderName: "R", audioFileName: "R.m4a")
             context.insert(recording)
@@ -452,7 +455,7 @@ struct ModelContainerTests {
             id = recording.id
         }
 
-        let reopened = try KVoiceSchema.onDisk(inLibraryRoot: directory.url)
+        let reopened = try TestContainer.onDisk(inLibraryRoot: directory.url)
         let loaded = try ModelContext(reopened).recording(id: id)
         #expect(loaded?.title == "R")
         #expect(

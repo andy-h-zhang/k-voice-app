@@ -223,6 +223,77 @@ public actor TranscriptionJob {
         }
     }
 
+    // MARK: - Driving a job from a UI
+
+    /// Which entry point ``start(_:)`` should drive.
+    public enum RunMode: Sendable {
+        /// ``run()`` — the normal path, from the cheapest resume point.
+        case run
+        /// ``retry()`` — clears a failure first.
+        case retry
+        /// ``reprocess()`` — rebuilds from the saved response, no network.
+        case reprocess
+    }
+
+    /// Subscribes **and** starts, in one actor-isolated step.
+    ///
+    /// ``events()`` replays the current state and, when that state is terminal,
+    /// finishes the stream immediately — exactly right for an observer, and
+    /// exactly wrong for the caller that is about to restart a `failed` (or
+    /// re-process a `done`) job. Such a caller has no way to subscribe *after*
+    /// the status is cleared but *before* the run advances, so it would attach
+    /// to an already-finished stream and watch a stale badge for the whole run.
+    ///
+    /// Because this method's body is synchronous and actor-isolated, the
+    /// subscription is registered before the run can emit anything, whatever
+    /// the starting state. The stream always finishes: on a terminal event, or
+    /// — when a run ends without emitting one (`.alreadyDone`) or is cancelled
+    /// mid-flight — via ``conclude(_:)``.
+    ///
+    /// - Returns: This run's events, from wherever it starts to a terminal
+    ///   state.
+    public func start(_ mode: RunMode = .run) -> AsyncStream<TranscriptionJobEvent> {
+        let (stream, continuation) = AsyncStream<TranscriptionJobEvent>.makeStream()
+
+        let id = UUID()
+        subscribers[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeSubscriber(id) }
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            let status: RecordingStatus
+            switch mode {
+            case .run: status = await self.run()
+            case .retry: status = await self.retry()
+            case .reprocess: status = await self.reprocess()
+            }
+            await self.conclude(status)
+        }
+
+        return stream
+    }
+
+    /// Closes out a ``start(_:)`` run whose last act was not an emitted
+    /// terminal event.
+    ///
+    /// Two cases reach here: a run that finished without emitting (`.alreadyDone`
+    /// returns `.done` silently), and a cancelled run (which leaves the row
+    /// mid-flight on purpose). Either way a subscriber must not be left waiting.
+    private func conclude(_ status: RecordingStatus) {
+        guard lastEvent?.status.isTerminal != true else { return }
+
+        if status.isTerminal {
+            emit(TranscriptionJobEvent(recordingID: recordingID, status: status, at: now()))
+        } else {
+            for (id, continuation) in subscribers {
+                continuation.finish()
+                subscribers[id] = nil
+            }
+        }
+    }
+
     // MARK: - Pipeline
 
     private func pipeline(from plan: TranscriptionResumePlan) async throws -> RecordingStatus {

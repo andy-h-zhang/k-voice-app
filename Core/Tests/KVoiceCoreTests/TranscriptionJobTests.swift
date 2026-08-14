@@ -954,3 +954,143 @@ struct TranscriptionJobRealPipelineTests {
         #expect(verdict.name == "Carol")
     }
 }
+
+// MARK: - Subscribe-and-start
+
+/// `start(_:)` exists because `events()` cannot serve the caller that is about
+/// to *restart* a job. `events()` replays the current state and finishes the
+/// stream when that state is terminal — right for an observer, and a trap for
+/// a retry: the row is `failed` at the moment of subscription, so the caller
+/// would attach to an already-finished stream and never see the run it just
+/// asked for. These tests pin both halves of that contract.
+///
+/// Every test here consumes the stream to completion, so "the stream finishes"
+/// is asserted by the test returning at all. The time limits turn a regression
+/// into a failure rather than a suite that hangs forever.
+@Suite("Transcription job: subscribe and start in one step")
+struct TranscriptionJobStartTests {
+
+    @Test("start() delivers every transition of the run it begins", .timeLimit(.minutes(1)))
+    func deliversWholeRun() async throws {
+        let container = try TestContainer.inMemory()
+        let fixture = try RecordingFixture(container: container)
+        defer { fixture.cleanUp() }
+
+        let provider = ScriptedProvider(pollSteps: [
+            .response(TranscriptFixtures.inProgress(status: .queued)),
+            .response(TranscriptFixtures.completed())
+        ])
+        let job = TranscriptionJob.forTest(
+            fixture: fixture, provider: provider, matching: matching(["A": nil, "B": nil])
+        )
+
+        let stream = await job.start()
+        var events: [TranscriptionJobEvent] = []
+        for await event in stream { events.append(event) }
+
+        // Subscription happens before the run can emit, so the first real
+        // transition is the first thing the caller sees — nothing is lost to a
+        // race between starting and subscribing.
+        #expect(statusPath(events) == [.uploading, .queued, .transcribing, .matching, .done])
+        #expect(events.last?.status == .done)
+        #expect(try fixture.snapshot().status == .done)
+    }
+
+    @Test("retrying a failed job streams the new run, not the old failure", .timeLimit(.minutes(1)))
+    func retryDoesNotReplayTheFailure() async throws {
+        let container = try TestContainer.inMemory()
+        // Staged as a run that uploaded, then failed before a transcript id
+        // existed — so the retry resubmits without re-uploading.
+        let fixture = try RecordingFixture(
+            container: container,
+            status: .failed(message: "the network went away"),
+            configure: { $0.uploadedAudioURLString = "https://cdn.assemblyai.com/upload/fixture" }
+        )
+        defer { fixture.cleanUp() }
+
+        // The trap, demonstrated: a plain `events()` subscription on this row
+        // hands back a stream that is already finished. This loop completes
+        // immediately, having seen only the stale failure.
+        let observer = TranscriptionJob.forTest(
+            fixture: fixture,
+            provider: ScriptedProvider.offline(),
+            matching: StubSpeakerMatching(failingWith: MatchingBlewUp())
+        )
+        var replayed: [TranscriptionJobEvent] = []
+        for await event in await observer.events() { replayed.append(event) }
+        #expect(replayed.map(\.status.kind) == [.failed])
+
+        // `start(.retry)` instead: the failure is cleared and the whole run is
+        // reported, because subscribing and starting are one atomic step.
+        let provider = ScriptedProvider(pollSteps: [.response(TranscriptFixtures.completed())])
+        let job = TranscriptionJob.forTest(
+            fixture: fixture, provider: provider, matching: matching(["A": nil, "B": nil])
+        )
+
+        let stream = await job.start(.retry)
+        var events: [TranscriptionJobEvent] = []
+        for await event in stream { events.append(event) }
+
+        #expect(events.first?.status.kind != .failed)
+        #expect(statusPath(events) == [.queued, .transcribing, .matching, .done])
+        #expect(events.last?.status == .done)
+        // Retry never re-records and, here, never re-uploads either.
+        #expect(provider.counts.upload == 0)
+        #expect(provider.counts.create == 1)
+        #expect(try fixture.snapshot().status == .done)
+    }
+
+    @Test("the stream finishes even when the run emits nothing", .timeLimit(.minutes(1)))
+    func alreadyDoneStillFinishes() async throws {
+        let container = try TestContainer.inMemory()
+        let fixture = try RecordingFixture(container: container, status: .done)
+        defer { fixture.cleanUp() }
+
+        // `.alreadyDone` returns without emitting a single event. Without
+        // `conclude(_:)` closing it out, this loop would never return and the
+        // app's status store would hold a job that looks forever busy.
+        let provider = ScriptedProvider.offline()
+        let matcher = StubSpeakerMatching(failingWith: MatchingBlewUp())
+        let job = TranscriptionJob.forTest(fixture: fixture, provider: provider, matching: matcher)
+
+        let stream = await job.start()
+        var events: [TranscriptionJobEvent] = []
+        for await event in stream { events.append(event) }
+
+        #expect(events.map(\.status) == [.done])
+        #expect(provider.counts == (upload: 0, create: 0, poll: 0))
+        #expect(matcher.calls == 0)
+        #expect(try fixture.snapshot().status == .done)
+    }
+
+    @Test("start(.reprocess) rebuilds from the saved response with no network", .timeLimit(.minutes(1)))
+    func reprocessMode() async throws {
+        let container = try TestContainer.inMemory()
+        let fixture = try RecordingFixture(container: container, status: .done)
+        defer { fixture.cleanUp() }
+        try fixture.writeRawTranscript(TranscriptFixtures.completed())
+        try fixture.mutate { recording, _ in
+            recording.rawResponseFile = RawTranscriptStore.defaultFileName
+        }
+
+        let aliceID = try makePerson(container, name: "Alice")
+        let provider = ScriptedProvider.offline()
+        let job = TranscriptionJob.forTest(
+            fixture: fixture,
+            provider: provider,
+            matching: matching(["A": ("Alice", aliceID, 0.93), "B": nil])
+        )
+
+        let stream = await job.start(.reprocess)
+        var events: [TranscriptionJobEvent] = []
+        for await event in stream { events.append(event) }
+
+        #expect(statusPath(events) == [.matching, .done])
+        #expect(provider.counts == (upload: 0, create: 0, poll: 0))
+
+        let snapshot = try fixture.snapshot()
+        #expect(snapshot.status == .done)
+        #expect(snapshot.utteranceCount == 3)
+        #expect(snapshot.participantNames == ["Alice"])
+    }
+}

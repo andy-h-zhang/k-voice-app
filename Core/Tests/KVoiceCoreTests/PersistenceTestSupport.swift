@@ -6,10 +6,57 @@ import SwiftData
 // MARK: - Containers
 
 enum TestContainer {
+
+    /// Serializes `ModelContainer` construction across the whole suite.
+    ///
+    /// Twice during Phase 4 a run died with `SIGSEGV` inside CoreData's store
+    /// setup, losing the run's buffered output with it:
+    ///
+    /// ```
+    /// -[__NSDictionaryM setObject:forKey:]
+    /// -[NSSQLEntity_DerivedAttributesExtension _generateTriggerSQL]
+    /// -[NSSQLiteConnection createTriggersForEntities:]
+    /// -[NSSQLiteConnection createTablesForEntities:]
+    /// -[NSPersistentStoreCoordinator addPersistentStoreWithType:…]
+    /// ```
+    ///
+    /// That is CoreData compiling the model into SQL while mutating shared
+    /// state without a lock of its own. Swift Testing runs suites in parallel
+    /// and ~35 tests each mint a container, so several threads can be inside
+    /// that path at once. Using containers concurrently afterwards is fine —
+    /// only *construction* is the problem, which is why serializing it costs
+    /// the suite nothing measurable.
+    ///
+    /// The crash is rare and load-sensitive (it did not recur in 30 subsequent
+    /// runs, 14 of them without this lock), so this is a fix argued from the
+    /// crash stack rather than from a reproduction. It cannot regress
+    /// anything: it removes concurrency from one path and adds none.
+    ///
+    /// Test-only on purpose. The app builds exactly one container, once, on
+    /// the main actor (`AppServices`, memoized by `AppBootstrap`), so
+    /// production never enters this race and `KVoiceSchema` is unchanged.
+    private static let creationLock = NSLock()
+
+    /// Runs a container-building closure under the suite-wide lock.
+    ///
+    /// Use this for any construction that does not go through the two helpers
+    /// below — every `ModelContainer` in the suite must take the same lock or
+    /// the serialization has a hole in it.
+    static func serialized<T>(_ build: () throws -> T) rethrows -> T {
+        creationLock.lock()
+        defer { creationLock.unlock() }
+        return try build()
+    }
+
     /// A private in-memory store. Every test gets its own, so suites can run
     /// in parallel and nothing survives a test.
     static func inMemory() throws -> ModelContainer {
-        try KVoiceSchema.inMemory()
+        try serialized { try KVoiceSchema.inMemory() }
+    }
+
+    /// A store backed by a file, for the tests that assert persistence.
+    static func onDisk(inLibraryRoot root: URL) throws -> ModelContainer {
+        try serialized { try KVoiceSchema.onDisk(inLibraryRoot: root) }
     }
 }
 
