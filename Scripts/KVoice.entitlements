@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Applied by Scripts/release.sh only when signing with a real Developer ID
+	  identity, which also turns on the hardened runtime.
+
+	  The hardened runtime blocks microphone input unless the binary carries
+	  this entitlement — granting mic permission in System Settings is NOT
+	  enough, and the failure surfaces as a silent capture failure rather than
+	  a permission prompt. Ad-hoc builds don't use the hardened runtime and so
+	  don't need it.
+
+	  The app is not sandboxed (spec: "no sandboxing constraints beyond mic
+	  permission"), so it needs no file-access entitlements to read and write
+	  the user's library folder.
+	-->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
