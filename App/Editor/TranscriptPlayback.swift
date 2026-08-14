@@ -116,9 +116,15 @@ final class TranscriptPlayback {
 
     func play() {
         guard let player else { return }
-        // Restart from the top when the playhead is parked at the end,
-        // rather than playing nothing.
-        if player.currentTime >= duration - 0.05 { player.currentTime = 0 }
+        // Restart from the top when the playhead is parked at the end, rather
+        // than playing nothing. The *published* position has to rewind with it:
+        // otherwise the scrubber sits at the end and the highlight stays on the
+        // last line for the first tenth of a second of playback.
+        if player.currentTime >= duration - 0.05 {
+            player.currentTime = 0
+            currentTime = 0
+            updateHighlight()
+        }
         guard player.play() else { return }
         isPlaying = true
         startTicking()
@@ -169,7 +175,13 @@ final class TranscriptPlayback {
         if !isPlaying { play() }
     }
 
-    /// Releases the audio device. Called when the editor goes away.
+    /// Releases the audio device and forgets the recording entirely.
+    ///
+    /// Every field resets, not just the player: this object outlives a single
+    /// recording as soon as the editor is reused for another one, and a
+    /// leftover `duration`, span table or highlight would describe the previous
+    /// meeting — a scrubber the wrong length, and a highlight on a line that no
+    /// longer exists.
     func stop() {
         ticker?.cancel()
         ticker = nil
@@ -177,6 +189,12 @@ final class TranscriptPlayback {
         player = nil
         isLoaded = false
         isPlaying = false
+        isScrubbing = false
+        currentTime = 0
+        duration = 0
+        currentUtteranceIndex = nil
+        spans = []
+        loadFailure = nil
     }
 
     // MARK: - Ticking

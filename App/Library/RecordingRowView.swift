@@ -54,6 +54,8 @@ struct RecordingRowView: View {
 
             Spacer(minLength: 12)
 
+            audioDragHandle
+
             StatusBadge(status: status, detail: services.jobStatus.detail(for: row.id))
 
             primaryAction
@@ -66,8 +68,26 @@ struct RecordingRowView: View {
             onOpenTranscript(row)
         }
         .contextMenu { menu }
-        // Spec §Export: the audio is draggable straight out of the library.
-        .onDrag { FileDrag.provider(for: audioURL) }
+    }
+
+    /// Drag-out of the audio (spec §Export), on a grab handle rather than the
+    /// whole row.
+    ///
+    /// `onDrag` applied to the row wraps everything inside it in a drag
+    /// gesture, and on macOS that takes precedence over the `List`'s own
+    /// click-to-select and over the double-click that opens the transcript —
+    /// so the row-wide version cost two working interactions to add one. A
+    /// dedicated handle keeps all three.
+    private var audioDragHandle: some View {
+        Image(systemName: "waveform")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .onDrag { FileDrag.provider(for: audioURL) }
+            .help("Drag the audio file out of KVoice.")
+            .accessibilityLabel("Drag audio file")
     }
 
     // MARK: - Title

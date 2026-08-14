@@ -40,6 +40,8 @@ struct SpeakerAssignmentSheet: View {
 
     let request: SpeakerAssignmentRequest
     let people: [PersonOption]
+    /// False while the profile library is still being read.
+    let arePeopleLoaded: Bool
     /// An explanatory line: the near-miss profile, or what is being moved.
     let context: String?
     let onAssign: (PersonChoice) -> Void
@@ -84,7 +86,11 @@ struct SpeakerAssignmentSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button(confirmTitle, action: commit)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(choice == nil)
+                    // Also blocked until the profiles are in: assigning against
+                    // an unread library would label an existing person as a new
+                    // one. (`upsertPerson` would still resolve it correctly —
+                    // this is about not telling the user something false.)
+                    .disabled(choice == nil || !arePeopleLoaded)
             }
         }
         .padding(20)
@@ -97,7 +103,16 @@ struct SpeakerAssignmentSheet: View {
     private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if matches.isEmpty {
+                if !arePeopleLoaded {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Reading voice profiles…")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else if matches.isEmpty {
                     Text(people.isEmpty ? "No voice profiles yet." : "No profile matches that name.")
                         .font(.caption)
                         .foregroundStyle(.secondary)

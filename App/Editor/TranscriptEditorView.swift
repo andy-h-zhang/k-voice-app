@@ -69,7 +69,13 @@ struct TranscriptEditorView: View {
         .navigationTitle(model.title)
         .navigationSubtitle(subtitle)
         .toolbar { toolbarItems }
-        .onAppear {
+        // Keyed to the recording, not to "appeared once": if this view is ever
+        // reused for a different recording — which is exactly what happens the
+        // day the editor becomes a split-view detail pane — the player, the
+        // duration and the spans must all be rebuilt rather than left pointing
+        // at the previous meeting.
+        .task(id: model.recordingID) {
+            playback.stop()
             playback.load(url: model.audioURL)
             playback.setSpans(model.orderedUtterances)
         }
@@ -91,6 +97,7 @@ struct TranscriptEditorView: View {
             SpeakerAssignmentSheet(
                 request: request,
                 people: model.people,
+                arePeopleLoaded: model.arePeopleLoaded,
                 context: assignmentContext(for: request)
             ) { choice in
                 Task { await apply(choice, to: request) }
@@ -146,7 +153,12 @@ struct TranscriptEditorView: View {
                     help: "Drag out a \(defaultFormat.displayName) transcript. "
                         + "Dragging exports it into the recording's folder first."
                 ) {
-                    FileDrag.transcriptProvider(
+                    // The drag renders from the database, so anything still
+                    // sitting in the debounce has to land first — otherwise the
+                    // file that leaves the app is missing the user's last
+                    // sentence, and they have no way to know.
+                    model.flushPendingEdits()
+                    return FileDrag.transcriptProvider(
                         recordingID: model.recordingID,
                         container: services.container,
                         libraryRoot: services.libraryRoot,
@@ -214,7 +226,7 @@ struct TranscriptEditorView: View {
             .onChange(of: playback.currentUtteranceIndex) { _, index in
                 guard followPlayback, playback.isPlaying, let index else { return }
                 withAnimation(.easeInOut(duration: 0.25)) {
-                    proxy.scrollTo(index, anchor: .center)
+                    proxy.scrollTo(ParagraphAnchor(utteranceIndex: index), anchor: .center)
                 }
             }
         }
@@ -246,7 +258,10 @@ struct TranscriptEditorView: View {
                 hasTranscript: !model.isEmpty,
                 container: services.container,
                 libraryRoot: services.libraryRoot,
-                defaultFormat: defaultFormat
+                defaultFormat: defaultFormat,
+                // Same reason as the drag chip: an export renders from the
+                // rows, so the debounce has to be drained before it reads them.
+                willExport: { model.flushPendingEdits() }
             ) { result in
                 switch result {
                 case .success(let url):

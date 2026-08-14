@@ -22,35 +22,73 @@ struct TurnView: View {
                     model: model,
                     playback: playback,
                     speakers: speakers,
-                    speakerLabel: turn.speakerLabel,
                     onAssign: onAssign
                 )
-                .id(index)
+                .id(ParagraphAnchor(utteranceIndex: index))
             }
         }
     }
 
+    /// The slots under this turn, resolved to speakers.
+    private var turnSpeakers: [EditorSpeaker] {
+        turn.speakerLabels.compactMap { model.speaker(labeled: $0) }
+    }
+
     private var header: some View {
         HStack(spacing: 8) {
-            if let speaker = model.speaker(labeled: turn.speakerLabel) {
+            if turnSpeakers.isEmpty {
+                Text(turn.speakerName).font(.headline)
+            } else {
                 Menu {
-                    SpeakerMenuItems(
-                        speaker: speaker,
-                        allSpeakers: speakers,
-                        onAssign: onAssign,
-                        onMerge: onMerge,
-                        onClear: onClear
-                    )
+                    if let only = turnSpeakers.count == 1 ? turnSpeakers[0] : nil {
+                        SpeakerMenuItems(
+                            speaker: only,
+                            allSpeakers: speakers,
+                            onAssign: onAssign,
+                            onMerge: onMerge,
+                            onClear: onClear
+                        )
+                    } else {
+                        // Two diarized speakers sharing one name collapsed into
+                        // this turn. Operating on "the" speaker would silently
+                        // touch half its lines, so each slot is addressed by
+                        // name — and merging them is the obvious repair.
+                        Text("Diarization split this speaker")
+                        ForEach(turnSpeakers) { speaker in
+                            Menu("Speaker \(speaker.label) · \(speaker.utteranceCount) lines") {
+                                SpeakerMenuItems(
+                                    speaker: speaker,
+                                    allSpeakers: speakers,
+                                    onAssign: onAssign,
+                                    onMerge: onMerge,
+                                    onClear: onClear
+                                )
+                            }
+                        }
+                    }
                 } label: {
-                    Text(turn.speakerName)
-                        .font(.headline)
-                        .foregroundStyle(speaker.isUnknown ? Color.orange : Color.primary)
+                    HStack(spacing: 4) {
+                        Text(turn.speakerName)
+                            .font(.headline)
+                            .foregroundStyle(
+                                turnSpeakers.allSatisfy(\.isUnknown) ? Color.orange : Color.primary
+                            )
+                        if turn.spansMultipleSlots {
+                            Image(systemName: "person.2.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-            } else {
-                Text(turn.speakerName).font(.headline)
+                .help(
+                    turn.spansMultipleSlots
+                        ? "Two diarized speakers (\(turn.speakerLabels.joined(separator: ", "))) "
+                            + "share this name."
+                        : "Speaker operations for this turn."
+                )
             }
 
             Button {
@@ -81,9 +119,6 @@ struct ParagraphView: View {
     let model: TranscriptEditorModel
     let playback: TranscriptPlayback
     let speakers: [EditorSpeaker]
-    /// The slot this paragraph's turn belongs to — excluded from the
-    /// "reassign this line to…" list, since it is already there.
-    let speakerLabel: String
     let onAssign: (SpeakerAssignmentRequest) -> Void
 
     @State private var isEditing = false
@@ -91,6 +126,13 @@ struct ParagraphView: View {
     @FocusState private var isFocused: Bool
 
     private var utterance: EditorUtterance? { model.utterance(utteranceIndex) }
+
+    /// This line's *own* slot, not its turn's.
+    ///
+    /// The two differ whenever two slots share a display name and Core grouped
+    /// them into one turn; taking it from the turn would offer this paragraph a
+    /// "reassign to X" where X is already its slot.
+    private var speakerLabel: String { utterance?.speakerLabel ?? "" }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -126,6 +168,9 @@ struct ParagraphView: View {
                 .lineLimit(1...)
                 .focused($isFocused)
                 .onChange(of: draft) { _, new in
+                    // Guarded so that restoring the field's text on the way out
+                    // cannot re-arm the debounce that was just flushed.
+                    guard isEditing else { return }
                     model.setText(new, forUtterance: utteranceIndex)
                 }
                 .onChange(of: isFocused) { _, focused in
@@ -136,14 +181,26 @@ struct ParagraphView: View {
                 .onExitCommand { endEditing() }
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
+            // No `textSelection(.enabled)` here on purpose: it installs its own
+            // gestures that contend with the two below, and selecting text is
+            // what the editing field (one double-click away) is for.
             Text(model.text(forUtterance: utteranceIndex))
-                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                // The 2-tap gesture is declared first so it wins the race;
-                // a single click still falls through to seek.
-                .onTapGesture(count: 2) { beginEditing() }
-                .onTapGesture { playback.seek(toUtterance: utteranceIndex) }
+                // `exclusively(before:)` rather than two `onTapGesture`s:
+                // stacked tap modifiers apply outward, so the single-tap ends
+                // up *outside* the double-tap and can claim the first click of
+                // a double-click. This states the precedence outright — the
+                // double-tap is tried first, and the single-tap only runs once
+                // it has failed.
+                .gesture(
+                    TapGesture(count: 2)
+                        .onEnded { beginEditing() }
+                        .exclusively(
+                            before: TapGesture(count: 1)
+                                .onEnded { playback.seek(toUtterance: utteranceIndex) }
+                        )
+                )
         }
     }
 
@@ -186,6 +243,9 @@ struct ParagraphView: View {
     /// editor, so what was typed is already on its way to the row, and Escape
     /// means "I am done here" rather than "undo that".
     private func endEditing() {
+        // Order matters: leaving edit mode *first* means the restore below
+        // cannot re-arm the debounce this call just flushed.
+        isEditing = false
         // Commit now rather than waiting out the debounce: the user has
         // finished with this paragraph.
         model.flushPendingEdits()
@@ -193,7 +253,6 @@ struct ParagraphView: View {
         // it, so the row cannot silently vanish from the transcript); restore
         // what is stored so the field and the database agree.
         draft = model.text(forUtterance: utteranceIndex)
-        isEditing = false
     }
 }
 

@@ -31,6 +31,15 @@ struct RecordingExportMenu: View {
     let libraryRoot: URL
     let defaultFormat: ExportFormat
 
+    /// Runs immediately before rendering, on the same turn of the run loop.
+    ///
+    /// The editor drains its debounced text edits here. An export reads the
+    /// `Utterance` rows through a fresh context, so an unflushed keystroke is
+    /// simply absent from the file — silently, which is the worst version of
+    /// that bug. Defaults to doing nothing for the library, which has no
+    /// unsaved editor state.
+    var willExport: () -> Void = {}
+
     /// Called with the file that was written, or with what went wrong.
     let onResult: (Result<URL, Error>) -> Void
 
@@ -49,6 +58,7 @@ struct RecordingExportMenu: View {
     }
 
     private func export(_ format: ExportFormat) {
+        willExport()
         do {
             let url = try TranscriptExport.export(
                 recordingID: recordingID,

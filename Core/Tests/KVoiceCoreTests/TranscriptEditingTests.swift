@@ -498,6 +498,33 @@ struct EditedTranscriptExportTests {
         #expect(document.turns[0].paragraphs == ["one", "two", "three", "four"])
     }
 
+    @Test("a turn shared by two slots keeps a distinct slot per line")
+    func turnSpansTwoSlots() throws {
+        let fixture = try EditableTranscript([
+            ("A", "one"), ("B", "two"), ("A", "three"), ("B", "four")
+        ])
+        let bea = try fixture.person(named: "Bea")
+        try fixture.slot("A").assign(bea)
+        try fixture.slot("B").assign(bea)
+
+        let recording = try fixture.reloaded()
+        let document = TranscriptDocument(recording: recording)
+
+        // Grouping is by display name, so this is one turn of four paragraphs…
+        #expect(document.turns.count == 1)
+        #expect(document.turns[0].paragraphs.count == 4)
+
+        // …whose lines still belong to two different diarized slots. An editor
+        // that stamped the whole turn with its first paragraph's slot would
+        // attribute lines two and four to A — offering them a "reassign to B"
+        // that is a no-op, and applying turn-level operations to half the turn.
+        // The editor therefore tracks a slot per paragraph, and this is the
+        // fact that makes that necessary.
+        let perLineSlots = recording.orderedUtterances.map(\.diarizedSpeaker)
+        #expect(perLineSlots == ["A", "B", "A", "B"])
+        #expect(Set(perLineSlots).count == 2)
+    }
+
     @Test("all three formats render the edited transcript into a folder")
     func writesEveryFormat() throws {
         let fixture = try EditableTranscript([("A", "first line"), ("B", "second line")])

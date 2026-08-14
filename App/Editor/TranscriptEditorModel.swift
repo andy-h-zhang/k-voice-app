@@ -37,10 +37,34 @@ struct EditorUtterance: Identifiable, Equatable {
 struct EditorTurn: Identifiable, Equatable {
     /// Index of the turn's first utterance — stable, and unique per turn.
     let id: Int
-    var speakerLabel: String
+
+    /// Every diarized slot contributing to this turn, in first-appearance
+    /// order — usually one.
+    ///
+    /// Not one label: Core groups by *display name*, so two slots both assigned
+    /// to the same person collapse into a single turn. Stamping the turn with
+    /// its first paragraph's slot would then make the header's operations apply
+    /// to only half the lines under it, and would offer a paragraph a
+    /// "reassign to X" that is already X. The header branches on this, and each
+    /// paragraph carries its own slot.
+    var speakerLabels: [String]
+
     var speakerName: String
     var startMs: Int
     var utteranceIndices: [Int]
+
+    /// True when diarization split this turn across slots that now share a name.
+    var spansMultipleSlots: Bool { speakerLabels.count > 1 }
+}
+
+/// Scroll target for a paragraph.
+///
+/// A distinct type rather than the bare utterance index: `EditorTurn.id` is the
+/// index of its first paragraph, so a raw `Int` would put a turn and a
+/// paragraph under the same identity in the scroll view's id space and
+/// `scrollTo` could land on either.
+struct ParagraphAnchor: Hashable {
+    let utteranceIndex: Int
 }
 
 /// One diarized speaker of this recording (one `SpeakerSlot`).
@@ -134,6 +158,13 @@ final class TranscriptEditorModel {
 
     /// Every enrolled profile, for the assignment pickers.
     private(set) var people: [PersonOption] = []
+
+    /// False until the profile library has been read once.
+    ///
+    /// The pickers distinguish "no profiles enrolled" from "not read yet" —
+    /// otherwise a user quick enough to open a speaker menu during launch sees
+    /// an empty list and concludes nobody is enrolled.
+    private(set) var arePeopleLoaded = false
 
     /// True once a load has run and found no utterances — the "nothing to edit
     /// yet" state, e.g. a recording that has not been transcribed.
@@ -242,6 +273,7 @@ final class TranscriptEditorModel {
             people = library.profiles
                 .map { PersonOption(id: $0.id, name: $0.name, embeddingCount: $0.embeddingCount) }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            arePeopleLoaded = true
         } catch {
             errorMessage = "Could not read the voice profiles: \(LibraryModel.describe(error))"
         }
@@ -308,13 +340,17 @@ final class TranscriptEditorModel {
                 cursor += 1
             }
             guard let first = indices.first else { continue }
+
+            // Every distinct slot under this turn, in first-appearance order.
+            var labels: [String] = []
+            for offset in start..<cursor where !labels.contains(surviving[offset].speakerLabel) {
+                labels.append(surviving[offset].speakerLabel)
+            }
+
             result.append(
                 EditorTurn(
                     id: first,
-                    // Two slots can share a display name (both assigned to the
-                    // same person), and Core groups by name — so the turn's
-                    // *slot* is the one its first paragraph came from.
-                    speakerLabel: surviving[start].speakerLabel,
+                    speakerLabels: labels,
                     speakerName: turn.speaker,
                     startMs: turn.startMs,
                     utteranceIndices: indices
@@ -352,16 +388,24 @@ final class TranscriptEditorModel {
 
         guard !pendingEdits.isEmpty else { return }
         let edits = pendingEdits
-        pendingEdits = [:]
 
+        // Cleared only once the save has succeeded. Dropping them up front
+        // loses the user's typing on every path that returns or throws before
+        // the write — the row having gone missing, or the store refusing the
+        // save — which is the one failure a text editor must not have.
         do {
             let context = ModelContext(container)
             context.autosaveEnabled = false
-            guard let recording = try context.recording(id: recordingID) else { return }
+            guard let recording = try context.recording(id: recordingID) else {
+                errorMessage = "This recording is no longer in the library, so your last edit "
+                    + "could not be saved."
+                return
+            }
 
             var rows: [Int: Utterance] = [:]
             for row in recording.utterances { rows[row.index] = row }
 
+            var applied: [Int: EditorUtterance] = [:]
             for (index, text) in edits {
                 guard let row = rows[index], row.text != text else { continue }
                 // A paragraph cleared to nothing is not persisted: Core's
@@ -372,12 +416,23 @@ final class TranscriptEditorModel {
 
                 row.text = text
                 row.isEdited = true
-                utterancesByIndex[index]?.text = text
-                utterancesByIndex[index]?.isEdited = true
+
+                // Staged, not applied: the in-memory copy must not claim an
+                // edit the store then refuses.
+                if var copy = utterancesByIndex[index] {
+                    copy.text = text
+                    copy.isEdited = true
+                    applied[index] = copy
+                }
             }
 
             if context.hasChanges { try context.save() }
+
+            for (index, copy) in applied { utterancesByIndex[index] = copy }
+            pendingEdits = [:]
         } catch {
+            // `pendingEdits` is deliberately left intact, so the next flush —
+            // the debounce, leaving the field, or closing the screen — retries.
             errorMessage = "Could not save your edit: \(LibraryModel.describe(error))"
         }
     }
@@ -397,9 +452,16 @@ final class TranscriptEditorModel {
             let personID = try await resolve(choice)
 
             let embedding: [Float] = try withRecording { recording, context in
-                guard let slot = recording.speakerSlot(labeled: label),
-                    let person = try context.person(id: personID)
-                else { return [] }
+                // Not a silent no-op: a slot or person that vanished under us
+                // means a re-process (or a People deletion) ran while this
+                // screen was open, and the user needs to know their click did
+                // nothing rather than assume it worked.
+                guard let slot = recording.speakerSlot(labeled: label) else {
+                    throw TranscriptEditorError.speakerNotFound(label: label)
+                }
+                guard let person = try context.person(id: personID) else {
+                    throw TranscriptEditorError.personNotFound
+                }
 
                 slot.assign(person, confirmed: true)
                 recording.renumberUnknownSpeakers()
@@ -582,11 +644,19 @@ final class TranscriptEditorModel {
 /// Failures the editor raises on its own behalf.
 enum TranscriptEditorError: LocalizedError {
     case recordingNotFound
+    case speakerNotFound(label: String)
+    case personNotFound
 
     var errorDescription: String? {
         switch self {
         case .recordingNotFound:
             return "This recording is no longer in the library."
+        case .speakerNotFound(let label):
+            return "Speaker \(label) is no longer part of this transcript — it may have been "
+                + "re-processed. Reopen the transcript and try again."
+        case .personNotFound:
+            return "That person is no longer in the profile library. Reopen the transcript "
+                + "and try again."
         }
     }
 }
