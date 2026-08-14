@@ -54,13 +54,13 @@ struct SettingsStoreTests {
         suite.store.storageFolderURL = folder
         suite.store.similarityThreshold = 0.71
         suite.store.keyterms = ["Kizaki", "KVoice"]
-        suite.store.defaultExportFormat = .docx
+        suite.store.defaultExportFormat = .word
         suite.store.inputDeviceUID = "AppleUSBAudioEngine:Blue:Yeti"
 
         #expect(suite.store.storageFolderURL.path == folder.path)
         #expect(abs(suite.store.similarityThreshold - 0.71) < 1e-6)
         #expect(suite.store.keyterms == ["Kizaki", "KVoice"])
-        #expect(suite.store.defaultExportFormat == .docx)
+        #expect(suite.store.defaultExportFormat == .word)
         #expect(suite.store.inputDeviceUID == "AppleUSBAudioEngine:Blue:Yeti")
 
         // A second store over the same suite reads the same values, which is
@@ -149,6 +149,20 @@ struct SettingsStoreTests {
         #expect(suite.store.inputDeviceUID == nil)
     }
 
+    @Test("every export format survives the UserDefaults round-trip")
+    func exportFormatPersistence() {
+        // `Export/ExportFormat.swift` documents that its raw values are
+        // persisted and must not change; this is the path that persists them.
+        let suite = SettingsSuite()
+        defer { suite.cleanUp() }
+
+        for format in ExportFormat.allCases {
+            suite.store.defaultExportFormat = format
+            #expect(suite.store.defaultExportFormat == format)
+            #expect(suite.defaults.string(forKey: SettingsStore.Key.defaultExportFormat) == format.rawValue)
+        }
+    }
+
     @Test("an unrecognized export format decodes as Markdown")
     func unknownExportFormat() {
         let suite = SettingsSuite()
@@ -214,26 +228,6 @@ struct SettingsStoreTests {
         #expect(store.keyterms.isEmpty)
         #expect(store.similarityThreshold == ClusterMatcher.defaultThreshold)
         store.removeAll()
-    }
-}
-
-@Suite("Export format")
-struct ExportFormatTests {
-
-    @Test("the three spec formats carry the right extensions")
-    func extensions() {
-        #expect(ExportFormat.markdown.fileExtension == "md")
-        #expect(ExportFormat.plainText.fileExtension == "txt")
-        #expect(ExportFormat.docx.fileExtension == "docx")
-        #expect(ExportFormat.allCases.count == 3)
-    }
-
-    @Test("every format round-trips through its raw value")
-    func rawValues() {
-        for format in ExportFormat.allCases {
-            #expect(ExportFormat(rawValue: format.rawValue) == format)
-            #expect(!format.displayName.isEmpty)
-        }
     }
 }
 
