@@ -18,11 +18,17 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0")
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
+        // On-device speaker embeddings (WeSpeaker v2 / CoreML). Models are
+        // downloaded at runtime, not vendored — see FluidAudioEmbedder.
+        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.15.0")
     ],
     targets: [
         .target(
-            name: "KVoiceCore"
+            name: "KVoiceCore",
+            dependencies: [
+                .product(name: "FluidAudio", package: "FluidAudio")
+            ]
         ),
         .executableTarget(
             name: "speakerlab",
