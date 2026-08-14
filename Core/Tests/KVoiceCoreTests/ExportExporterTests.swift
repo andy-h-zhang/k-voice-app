@@ -40,7 +40,8 @@ struct ExportExporterTests {
     }
 
     /// The same sanitizer that names the recording's folder and `.m4a`, so an
-    /// export sits beside its audio under a matching name.
+    /// export in `Transcripts/` carries the same name as the audio it came
+    /// from and the two are matchable by eye.
     @Test("a title with illegal filename characters is sanitized")
     func sanitizesTitle() throws {
         let directory = try TemporaryDirectory()
@@ -131,7 +132,7 @@ struct ExportExporterTests {
     // MARK: - Collisions
 
     /// An export is a regenerated artifact: re-exporting should refresh the
-    /// file rather than pile up copies next to the recording.
+    /// file rather than pile up copies in the transcripts folder.
     @Test("re-exporting overwrites by default")
     func overwritesByDefault() throws {
         let directory = try TemporaryDirectory()

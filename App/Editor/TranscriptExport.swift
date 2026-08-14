@@ -20,22 +20,38 @@ enum TranscriptExport {
     static func document(
         for recordingID: UUID,
         container: ModelContainer
-    ) throws -> (document: TranscriptDocument, folderName: String) {
+    ) throws -> TranscriptDocument {
         let context = ModelContext(container)
         guard let recording = try context.recording(id: recordingID) else {
             throw TranscriptEditorError.recordingNotFound
         }
 
-        return (TranscriptDocument(recording: recording), recording.folderName)
+        return TranscriptDocument(recording: recording)
     }
 
-    /// Writes an export into the recording's own folder and returns its URL.
+    /// The app-wide default export destination: `<library root>/Transcripts`.
     ///
-    /// Beside the audio, not into a save panel: the spec's on-disk layout puts
-    /// exports in the recording's folder so they are grabbable in Finder next
-    /// to the `.m4a`, and `Exporter`'s default `.overwrite` policy means
-    /// re-exporting after an edit refreshes the file instead of piling up
-    /// "Standup 2.md", "Standup 3.md".
+    /// One folder for every recording's rendered transcript, rather than one
+    /// file buried in each recording's folder. A user who wants "the transcript
+    /// of Tuesday's standup" opens one place and reads filenames; the File menu
+    /// can point at it, and it is the destination for the export menu, the
+    /// editor toolbar and drag-out alike, so there is never a question of which
+    /// copy is current.
+    ///
+    /// `Exporter` itself stays destination-agnostic — it writes where it is
+    /// told. This function is the whole of the app's opinion.
+    static func destination(inLibraryRoot libraryRoot: URL) -> URL {
+        RecordingStore.transcriptsFolderURL(inLibraryRoot: libraryRoot)
+    }
+
+    /// Writes an export into the shared transcripts folder and returns its URL.
+    ///
+    /// The folder is created on demand by `Exporter`, so a library that has
+    /// never exported anything does not grow an empty folder. `Exporter`'s
+    /// default `.overwrite` policy means re-exporting after an edit refreshes
+    /// the file instead of piling up "Standup 2.md", "Standup 3.md" — safe in a
+    /// shared folder because `RecordingStore.rename` keeps one base name per
+    /// recording there.
     @discardableResult
     static func export(
         recordingID: UUID,
@@ -43,9 +59,8 @@ enum TranscriptExport {
         libraryRoot: URL,
         format: ExportFormat
     ) throws -> URL {
-        let (document, folderName) = try document(for: recordingID, container: container)
-        let folder = libraryRoot.appendingPathComponent(folderName, isDirectory: true)
-        return try Exporter.export(document, as: format, to: folder)
+        let document = try document(for: recordingID, container: container)
+        return try Exporter.export(document, as: format, to: destination(inLibraryRoot: libraryRoot))
     }
 }
 
@@ -74,8 +89,8 @@ enum FileDrag {
     /// Synchronous because `onDrag` is: rendering a transcript is string
     /// building plus one atomic write (a stored-entry zip, for `.docx`), which
     /// is microseconds for a meeting-sized document. The export lands in the
-    /// recording's folder as usual, so a dragged-out transcript is also a
-    /// transcript the user now has on disk.
+    /// shared transcripts folder as usual, so a dragged-out transcript is also
+    /// a transcript the user now has on disk.
     static func transcriptProvider(
         recordingID: UUID,
         container: ModelContainer,

@@ -199,9 +199,9 @@ private struct StorageSection: View {
         } footer: {
             Text(
                 """
-                One folder per recording, holding the audio, the raw transcript, and any \
-                exports — plus the app's database, so a backup of this folder is a backup of \
-                everything.
+                One folder per recording, holding the audio and the raw transcript, plus a \
+                shared Transcripts folder holding every exported .md, .txt and .docx — and \
+                the app's database, so a backup of this folder is a backup of everything.
 
                 Moving needs an empty or brand-new destination: KVoice moves the whole \
                 library in one go and won't merge it with another. Nothing may be recording \

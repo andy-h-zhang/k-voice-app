@@ -15,6 +15,7 @@ make test       # runs the full offline test suite (no network, no API key)
 make generate   # generates KVoice.xcodeproj from project.yml
 make app-build  # builds the macOS app (Debug)
 make release    # runs the tests, then builds + signs a Release .app
+make install    # builds a Release .app and installs it to /Applications
 make clean      # removes .build/, the generated project, and build/
 ```
 
@@ -23,6 +24,8 @@ make clean      # removes .build/, the generated project, and build/
 `make release` runs `make test` first — a release never ships untested — then
 builds the Release configuration and signs it. The final `.app` path is printed
 in a banner at the end (`build/release/Build/Products/Release/KVoice.app`).
+
+`make install` does the same, then swaps the result into `/Applications/KVoice.app` (quitting a running KVoice first) — the easiest way to get a real, launchable copy out of `build/` and into the normal place; use `sudo make install` if `/Applications` isn't writable.
 
 Signing is decided by what is in your keychain, detected with
 `security find-identity -v -p codesigning`:
@@ -52,6 +55,27 @@ Two things worth knowing:
 The script signs nested code inside-out and the bundle last, rather than using
 `codesign --deep` (which re-signs nested code with the *outer* bundle's
 entitlements). `--deep` is used only for verification.
+
+## Where files live
+
+The library is plain folders, not a bundle — everything is grabbable in Finder,
+and the app's **File** menu points at both halves of it:
+
+```
+~/Documents/KVoice/                 # configurable in Settings → Storage
+├── 2026-08-13 Standup/             # one folder per recording
+│   ├── 2026-08-13 Standup.m4a
+│   └── transcript.raw.json         # verbatim provider response
+├── Transcripts/                    # every rendered export, created on demand
+│   └── 2026-08-13 Standup.md
+└── KVoice.store                    # the SwiftData database
+```
+
+Rendered exports (`.md`, `.txt`, `.docx`) share one `Transcripts/` folder rather
+than sitting inside each recording's folder, so there is a single place to look
+for readable transcripts. Renaming a recording renames its exports there too;
+deleting one trashes them with it. A backup of the root is a backup of
+everything.
 
 ## AssemblyAI API key
 

@@ -17,17 +17,71 @@ struct KVoiceApp: App {
 
     var body: some Scene {
         WindowGroup {
-            switch bootstrap {
-            case .ready(let services):
-                RootView()
-                    .environment(services)
-            case .failed(let message, let path):
-                BootstrapFailureView(message: message, path: path)
-            }
+            // One size report for the whole window, identical for every
+            // sidebar section.
+            //
+            // The window follows what the root view reports, and before this
+            // that was whatever the current section happened to compute.
+            // Measured on a clean profile, the detail column alone drove the
+            // window to 960×1292 — a 1292-point-tall window on a 949-point
+            // screen — while an empty detail column gave exactly the 960×640
+            // `defaultSize`. That is the whole bug: the *content* was sizing
+            // the window, so every section switch re-sized it, and the number
+            // it landed on was nonsense. (The user's saved frame had reached
+            // "736 -1767 960 3177".)
+            //
+            // Flexible in both axes fixes it by making the report constant:
+            // whatever section is showing, the root says "any size from
+            // 720×480 upward", so switching sections changes nothing and
+            // nothing but the user moves the window. Verified by seeding
+            // frames and reading back the real geometry: 320×200 clamps up to
+            // exactly 720×532 (480 content + chrome), 5000×4000 fills the
+            // display, and 1240×820 survives a relaunch.
+            //
+            // Nothing else may go around `content`: SwiftUI derives this
+            // window's frame-autosave key from the root view's *type name*, so
+            // any wrapper that is a private type (or otherwise unnameable)
+            // mangles a runtime address into the key, and every launch then
+            // reads a key the last launch never wrote — the window comes back
+            // at `defaultSize` and the fix looks like the bug it was meant to
+            // repair. An earlier draft of this file did exactly that.
+            content
+                .frame(
+                    minWidth: 720,
+                    idealWidth: 960,
+                    maxWidth: .infinity,
+                    minHeight: 480,
+                    idealHeight: 640,
+                    maxHeight: .infinity
+                )
         }
+        // Only ever a first-launch fallback: once a frame has been saved, that
+        // wins. A window opening on a display too small for the size it asks
+        // for is filled to that display by AppKit, which is macOS's call, not
+        // this app's.
         .defaultSize(width: 960, height: 640)
+        // Floor from the content, no ceiling at all. The default `.automatic`
+        // also lets content impose a *maximum*, which is the other half of how
+        // a section can shrink the window it is shown in.
+        .windowResizability(.contentMinSize)
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            // Replaces New/Open — KVoice has no documents to open — with the
+            // two places its files actually live. The File menu is where a Mac
+            // user looks for "where is this saved", and it works from any
+            // section, including the record screen.
+            CommandGroup(replacing: .newItem) {
+                Button("Show Recordings in Finder") {
+                    guard let libraryRoot else { return }
+                    FinderIntegration.open(libraryRoot)
+                }
+                .disabled(libraryRoot == nil)
+
+                Button("Show Transcripts in Finder") {
+                    guard let libraryRoot else { return }
+                    FinderIntegration.openTranscriptsFolder(inLibraryRoot: libraryRoot)
+                }
+                .disabled(libraryRoot == nil)
+            }
         }
 
         Settings {
@@ -40,4 +94,52 @@ struct KVoiceApp: App {
             }
         }
     }
+
+    @ViewBuilder
+    private var content: some View {
+        switch bootstrap {
+        case .ready(let services):
+            RootView()
+                .environment(services)
+        case .failed(let message, let path):
+            BootstrapFailureView(message: message, path: path)
+        }
+    }
+
+    /// The library root, when there is one.
+    ///
+    /// A failed bootstrap still knows the path it could not open, and that is
+    /// exactly the moment someone wants Finder pointed at it.
+    private var libraryRoot: URL? {
+        switch bootstrap {
+        case .ready(let services): return services.libraryRoot
+        case .failed(_, let path): return URL(fileURLWithPath: path)
+        }
+    }
 }
+
+// MARK: - Window frame persistence
+//
+// There is deliberately no code here.
+//
+// SwiftUI already gives a `WindowGroup`'s window an `NSWindow` frame-autosave
+// name, so the size and position a user chooses are written to `UserDefaults`
+// on every resize and restored on the next launch — for free. What it does not
+// do is make that name stable: it is derived from the root view's *type name*,
+// so wrapping the root in a private helper (an `NSViewRepresentable` that sets
+// its own autosave name, say) mangles an unnameable context — including a
+// runtime address — into the key, and every launch then reads a key the last
+// launch never wrote. The window comes back at `defaultSize` and the fix looks
+// like the bug it was meant to repair.
+//
+// An earlier draft of this file did exactly that. What it left behind on disk
+// is worth recording:
+//
+//     "NSWindow Frame …KVoice.RootView…-1-AppWindow-1" = "736 -1767 960 3177"
+//
+// A 3177-point-tall window at y = -1767 — the ideal-size runaway that made
+// resizing feel "very restricted", saved faithfully by a mechanism that was
+// working correctly on wrong input. That key is now orphaned: the root view's
+// type changed when the frame modifier above was added, so the poisoned frame
+// is simply never read again, and existing installs come back at
+// `defaultSize` once and then persist whatever the user picks.

@@ -31,7 +31,12 @@ struct LevelMeter: View {
                 Capsule()
                     .fill(fillColor)
                     .frame(width: max(0, geometry.size.width * clamped))
-                    .animation(.linear(duration: 0.08), value: clamped)
+                    // Shorter than the ~66 ms between level values, so each
+                    // animation finishes before the next one starts. At 80 ms
+                    // they overlapped forever: there was always an animation in
+                    // flight, so the window never stopped redrawing for as long
+                    // as a recording ran.
+                    .animation(.linear(duration: 0.05), value: clamped)
             }
         }
         .frame(height: 10)

@@ -5,11 +5,16 @@
 # XcodeGen to produce KVoice.xcodeproj, which is generated on demand and
 # never hand-edited or committed (see .gitignore).
 
-.PHONY: build test generate app-build release clean
+.PHONY: build test generate app-build release install clean
 
 CORE_DIR := Core
 XCODEPROJ := KVoice.xcodeproj
 SCHEME := KVoice
+
+# Where `make release` puts its .app (see Scripts/release.sh's $APP) and
+# where `make install` puts it.
+RELEASE_APP := build/release/Build/Products/Release/$(SCHEME).app
+INSTALLED_APP := /Applications/$(SCHEME).app
 
 # Build the Core Swift package (KVoiceCore library + speakerlab CLI).
 build:
@@ -73,6 +78,27 @@ app-build: generate
 # "Release builds" section for how to switch identities.
 release: test generate
 	@./Scripts/release.sh
+
+# Install the Release build to /Applications, replacing any existing copy.
+#
+# Depends on `release`, so an install always runs the tests, builds, and
+# signs first — never a stale or untested .app. A running KVoice is quit
+# first (best-effort; fine if it wasn't running). The swap is `rm -rf` +
+# `ditto` rather than `cp`/`mv`: ditto preserves extended attributes and the
+# code signature intact, where a naive copy can silently strip them. If
+# /Applications isn't writable, this fails with a clear message rather than
+# invoking sudo itself — re-run as `sudo make install`.
+install: release
+	@[ -d "$(RELEASE_APP)" ] || { echo "error: $(RELEASE_APP) not found after release build."; exit 1; }
+	@[ -w /Applications ] || { echo "error: /Applications is not writable. Re-run as 'sudo make install'."; exit 1; }
+	@echo "==> Quitting any running $(SCHEME)"
+	@osascript -e 'if application "$(SCHEME)" is running then tell application "$(SCHEME)" to quit' >/dev/null 2>&1 || true
+	@sleep 1
+	@echo "==> Installing $(SCHEME).app to $(INSTALLED_APP)"
+	@rm -rf "$(INSTALLED_APP)" && ditto "$(RELEASE_APP)" "$(INSTALLED_APP)"
+	@echo ""
+	@echo "Installed: $(INSTALLED_APP)"
+	@echo "Ad-hoc builds are Gatekeeper-blocked on first launch — right-click the app in Finder and choose Open once to allow it."
 
 # Remove build artifacts (SwiftPM .build, the generated Xcode project, and the
 # release output tree).

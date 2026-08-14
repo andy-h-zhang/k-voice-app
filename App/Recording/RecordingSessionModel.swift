@@ -37,7 +37,20 @@ final class RecordingSessionModel {
 
     /// Seconds of audio actually written — from the source, not a wall clock,
     /// so paused time is excluded and the display matches the file.
+    ///
+    /// Updated ~10 times a second, so **only the record screen should read
+    /// it**: under Observation, every reader of this property is invalidated on
+    /// every tick, and a reader that is always on screen (the sidebar) would
+    /// re-render the whole window ten times a second for a clock that shows
+    /// seconds. Anything outside the record screen wants ``elapsedSeconds``.
     private(set) var elapsed: TimeInterval = 0
+
+    /// The same clock, rounded down to whole seconds and written only when the
+    /// value actually changes — so a view reading it re-renders at 1 Hz.
+    ///
+    /// This exists for the sidebar's recording indicator, which is on screen in
+    /// every section and must cost the window nothing to keep there.
+    private(set) var elapsedSeconds: Int = 0
 
     /// Normalized input level (0…1) for the meter.
     private(set) var level: Float = 0
@@ -98,11 +111,14 @@ final class RecordingSessionModel {
 
     // MARK: - Environment
 
-    /// Refreshes the input-device name and the microphone permission state.
-    /// Cheap; called whenever the record view appears.
+    /// Refreshes the microphone permission state, and starts a refresh of the
+    /// input-device name.
+    ///
+    /// Called whenever the record view appears. Only the permission half is
+    /// synchronous — it is a local TCC lookup. The device name is not.
     func refresh() {
         refreshPermission()
-        refreshInputDevice()
+        Task { await refreshInputDevice() }
     }
 
     private func refreshPermission() {
@@ -114,16 +130,38 @@ final class RecordingSessionModel {
         }
     }
 
-    private func refreshInputDevice() {
-        do {
-            if let uid = settings.inputDeviceUID {
-                deviceName = try AudioDeviceManager.inputDevice(withUID: uid).name
-            } else {
-                deviceName = try AudioDeviceManager.defaultInputDevice()?.name
+    /// Looks the input device's name up **off the main actor**.
+    ///
+    /// This was the single worst thing the app did on the main thread, and it
+    /// did it at the worst possible moment. `AudioDeviceManager` answers by
+    /// walking the CoreAudio HAL — `AudioObjectGetPropertyData` for the device
+    /// list, then four more per device for UID, name, channel count and sample
+    /// rate. Every one of those is a synchronous IPC round trip to `coreaudiod`
+    /// that takes the HAL's global lock.
+    ///
+    /// `start()` called it *immediately after* `MicSource.start()` returned —
+    /// i.e. while the HAL was still mid-bring-up of the very device being
+    /// opened, with that lock heavily contended. The main thread blocked there
+    /// for as long as the HAL wanted, which is why the window stopped redrawing
+    /// the instant recording began and the sidebar came back blank. Nothing
+    /// hid the sidebar; the main thread was simply not running.
+    ///
+    /// `Task.detached` rather than a plain `Task`: a plain one inherits the
+    /// main actor and would put the HAL walk straight back where it came from.
+    /// `AudioInputDevice` is `Sendable`, so only the finished name crosses back.
+    private func refreshInputDevice() async {
+        let uid = settings.inputDeviceUID
+        let name = await Task.detached(priority: .utility) { () -> String? in
+            do {
+                if let uid {
+                    return try AudioDeviceManager.inputDevice(withUID: uid).name
+                }
+                return try AudioDeviceManager.defaultInputDevice()?.name
+            } catch {
+                return nil
             }
-        } catch {
-            deviceName = nil
-        }
+        }.value
+        deviceName = name
     }
 
     // MARK: - Transport
@@ -135,6 +173,7 @@ final class RecordingSessionModel {
         notice = nil
         lastSaved = nil
         elapsed = 0
+        elapsedSeconds = 0
         level = 0
         phase = .starting
 
@@ -170,8 +209,12 @@ final class RecordingSessionModel {
         self.startedAt = Date()
         self.permission = .granted
         phase = .recording
-        refreshInputDevice()
+        // Observers first, then the device name. The order is the point: the
+        // meter and the clock start moving immediately, and the name — which
+        // has to ask the HAL, mid-bring-up, on a background thread — arrives
+        // whenever it arrives without holding up a single frame of UI.
         observe(source)
+        await refreshInputDevice()
     }
 
     func pause() async {
@@ -216,6 +259,7 @@ final class RecordingSessionModel {
 
         let duration = summary?.duration ?? elapsed
         elapsed = duration
+        elapsedSeconds = Int(duration)
 
         guard let summary, summary.frameCount > 0 else {
             // A source that captured nothing (no signal path at all) would
@@ -281,9 +325,20 @@ final class RecordingSessionModel {
         // The elapsed display is polled from the source rather than counted
         // here: `recordedDuration` is frames actually written, so it stops
         // during a pause and matches the finished file exactly.
-        tickTask = Task { [weak self] in
+        //
+        // `weak source` so that this loop is never what holds the last
+        // reference to a `MicSource`. It sleeps between polls, so cancellation
+        // is not instant, and a strong capture meant a source could outlive
+        // `stop()` and then deallocate *here* — on the main actor, which is
+        // where this task runs.
+        tickTask = Task { [weak self, weak source] in
             while !Task.isCancelled {
-                self?.elapsed = source.recordedDuration
+                guard let source else { return }
+                let seconds = source.recordedDuration
+                self?.elapsed = seconds
+                // Written only on change: see `elapsedSeconds`.
+                let whole = Int(seconds)
+                if self?.elapsedSeconds != whole { self?.elapsedSeconds = whole }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
@@ -304,7 +359,7 @@ final class RecordingSessionModel {
                     The audio input device changed. Recording is paused and everything \
                     captured so far is safe — resume to continue on the current device.
                     """
-                refreshInputDevice()
+                Task { await refreshInputDevice() }
             case .interrupted:
                 notice = "The system interrupted recording. Resume to continue."
             case .writeFailure:
