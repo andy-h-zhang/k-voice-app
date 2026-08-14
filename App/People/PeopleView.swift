@@ -85,11 +85,19 @@ struct PeopleView: View {
             // the widest thing in the app (200 + 380 + the sidebar), so
             // selecting People both resized the window and set the effective
             // limit on how narrow it could ever be made again.
+            //
+            // These two numbers are still the widest minimum in the app, which
+            // makes them the ones that decide whether the *sidebar* can survive
+            // a narrow window: `NavigationSplitView` collapses the sidebar when
+            // the window cannot fit sidebar-min + detail-min. 160 + 280 = 440
+            // against a 160-point sidebar floor and a 720-point window floor
+            // leaves 120 points of slack, so it never has to. See the budget
+            // spelled out in `RootView`.
             HSplitView {
                 list(selection: $model.selection)
-                    .frame(minWidth: 180, maxWidth: 340)
+                    .frame(minWidth: 160, maxWidth: 340)
                 detail
-                    .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

@@ -271,6 +271,55 @@ change to the library row, the detail screen, or the window's layout.
 
 ---
 
+## L. Second QA round: the sidebar — [QA2]
+
+Two reports from the same user: the left panel would not resize, and it
+*disappeared* once a recording started. The second was not a hidden sidebar —
+nothing in the app has ever hidden it — but a stalled main thread, so the window
+stopped redrawing. Re-walk all of this after any change to `MicSource`,
+`RecordingSessionModel`, or the split-view column widths.
+
+**The sidebar resizes**
+
+- [ ] Drag the divider between the sidebar and the detail column. It moves
+      freely across a wide range (roughly 160–420 points), not the token
+      distance it used to.
+- [ ] With the sidebar dragged **wide**, drag the window narrow to its minimum.
+      The sidebar gives ground smoothly and **never disappears**.
+- [ ] Repeat that at the minimum window size in **each** section — Record,
+      Recordings, People (People is the tightest; it has the widest content).
+      The sidebar is still there and still clickable in all three.
+- [ ] With the sidebar dragged **narrow**, make the window very large. Every
+      section still lays out sensibly; nothing is clipped or stretched oddly.
+- [ ] The sidebar width you choose survives switching sections and a relaunch.
+
+**Recording no longer freezes the window**
+
+- [ ] Press **Record**. The window stays live: the sidebar keeps its items, the
+      rows still highlight on hover, and the clock and level meter both move.
+- [ ] **While still recording**, click **Recordings**, then **People**, then back
+      to **Record**. Every section opens normally and the recording keeps
+      running — the clock continues from where it was, it does not restart.
+- [ ] While recording, the **Record row in the sidebar shows a red dot and a
+      running timer**, in every section. Pause and it becomes a pause glyph.
+- [ ] Resize the window while recording. It resizes smoothly, with no beachball
+      and no blank areas.
+- [ ] Press **Stop**. The saved banner appears, the sidebar indicator clears,
+      and the app is fully normal again — every section still opens, and a
+      second recording can be started immediately.
+- [ ] Record for **several minutes** (the original report was of a hang that set
+      in after recording began, so a few seconds is not a fair test). The window
+      stays responsive throughout.
+- [ ] With the library folder on an **iCloud-synced path** (`~/Documents` by
+      default) record again and confirm the same. Slow writes were the thing
+      that used to stall the main thread.
+- [ ] While recording, **⌘Q**. The "Stop recording and quit?" confirmation still
+      appears, and Stop-and-Quit produces a playable `.m4a`.
+- [ ] Unplug or switch the input device mid-recording. The paused/device-changed
+      banner appears, the window stays responsive, and **Resume** works.
+
+---
+
 ## Sign-off
 
 | Spec acceptance criterion | Section | Pass |

@@ -71,10 +71,15 @@ struct RecordView: View {
 
     private var clock: some View {
         VStack(spacing: 6) {
+            // Deliberately no `.contentTransition(.numericText())`. This text
+            // is rewritten ten times a second, and a numeric-text transition
+            // takes longer than 100 ms to play — so each one was interrupted by
+            // the next and the window never reached a still frame. A monospaced
+            // digit clock does not need the digits to slide; it needs the main
+            // thread free.
             Text(Display.elapsed(session.elapsed))
                 .font(.system(size: 60, weight: .light, design: .rounded))
                 .monospacedDigit()
-                .contentTransition(.numericText())
                 .foregroundStyle(session.isActive ? .primary : .secondary)
 
             Text(statusLine)

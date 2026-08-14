@@ -70,12 +70,26 @@ public final class MicSource: AudioSource, @unchecked Sendable {
     private var downmixSourceFormat: AVAudioFormat?
     private var targetFormat: AVAudioFormat?
     private var outputURL: URL?
-    private var writtenFrames: Int64 = 0
-    private var recordedSampleRate: Double = 0
     private var recordedChannelCount: UInt32 = 0
     private var lastLevelEmit: TimeInterval = 0
     private var tapInstalled = false
     private var observers: [NSObjectProtocol] = []
+
+    /// Frames written and the rate they were written at — behind their *own*
+    /// lock, not `lock`.
+    ///
+    /// The record screen polls ``recordedDuration`` at 10 Hz on the main actor.
+    /// While these counters lived behind `lock`, every one of those polls could
+    /// block the main thread behind the tap's encode-and-write, and a main
+    /// thread that stalls stops drawing the window. See ``RecordingCounters``.
+    private let counters = RecordingCounters()
+
+    /// Where engine teardown runs when it is provoked from a thread we do not
+    /// own — see ``handleConfigurationChange()``.
+    private let teardownQueue = DispatchQueue(
+        label: "ai.kizaki.kvoice.micsource.teardown",
+        qos: .userInitiated
+    )
 
     // MARK: - Init
 
@@ -99,13 +113,39 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         self.eventContinuation = event.continuation
     }
 
+    /// Last-resort teardown for a source that was dropped without `stop()`.
+    ///
+    /// Everything here that can block is handed to ``teardownQueue`` rather
+    /// than run on whichever thread happened to release the last reference —
+    /// and that thread is very often the main one, because the objects holding
+    /// a source (a view model, the tasks observing its streams) are main-actor
+    /// bound. `removeTap` and `stop()` block until in-flight tap callbacks
+    /// return, so doing them inline is a main-thread stall of unbounded length.
     deinit {
         for token in observers { NotificationCenter.default.removeObserver(token) }
-        if tapInstalled { engine?.inputNode.removeTap(onBus: 0) }
-        if engine?.isRunning == true { engine?.stop() }
+
+        let engineToStop = engine
+        let fileToClose = file
+        let hadTap = tapInstalled
+        let queue = teardownQueue
+
+        engine = nil
         file = nil
         levelContinuation.finish()
         eventContinuation.finish()
+
+        guard engineToStop != nil || fileToClose != nil else { return }
+        queue.async {
+            if hadTap { engineToStop?.inputNode.removeTap(onBus: 0) }
+            if engineToStop?.isRunning == true { engineToStop?.stop() }
+            // Ordering matters as much as the hop does: the file reference is
+            // released only *after* the engine has stopped delivering buffers,
+            // and releasing it is what writes the MPEG-4 `moov` atom that makes
+            // the .m4a playable. `withExtendedLifetime` says so out loud rather
+            // than relying on the reader to know that a captured value dies
+            // with the closure.
+            withExtendedLifetime(fileToClose) {}
+        }
     }
 
     // MARK: - Introspection
@@ -117,11 +157,14 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         return state
     }
 
+    /// Seconds of audio actually written.
+    ///
+    /// Safe to poll from the main thread: it reads ``counters``, whose lock is
+    /// never held across the tap's encode-and-write, so this call cannot be
+    /// blocked by disk I/O. That is a contract, not an incidental property —
+    /// the record screen calls it ten times a second on the main actor.
     public var recordedDuration: TimeInterval {
-        lock.lock()
-        defer { lock.unlock() }
-        guard recordedSampleRate > 0 else { return 0 }
-        return Double(writtenFrames) / recordedSampleRate
+        counters.duration
     }
 
     /// The file being written, once `start` has succeeded.
@@ -190,12 +233,11 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         self.downmixSourceFormat = nil
         self.targetFormat = target
         self.outputURL = url
-        self.writtenFrames = 0
-        self.recordedSampleRate = target.sampleRate
         self.recordedChannelCount = target.channelCount
         self.lastLevelEmit = 0
         self.state = .recording
         lock.unlock()
+        counters.begin(sampleRate: target.sampleRate)
 
         registerObservers(for: engine)
 
@@ -216,8 +258,8 @@ public final class MicSource: AudioSource, @unchecked Sendable {
             self.targetFormat = nil
             self.outputURL = nil
             self.tapInstalled = false
-            self.recordedSampleRate = 0
             lock.unlock()
+            counters.reset()
             try? FileManager.default.removeItem(at: url)
             throw error
         }
@@ -288,8 +330,9 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         let engineToStop = engine
         let hadTap = tapInstalled
         let url = outputURL
-        let frames = writtenFrames
-        let sampleRate = recordedSampleRate
+        // Both together, so a summary cannot pair one run's frame count with
+        // another run's sample rate.
+        let (frames, sampleRate) = counters.snapshot()
         let channelCount = recordedChannelCount
 
         engine = nil
@@ -388,7 +431,15 @@ public final class MicSource: AudioSource, @unchecked Sendable {
                 if let converted = try Self.convert(source, using: converter, to: target),
                    converted.frameLength > 0 {
                     try file.write(from: converted)
-                    writtenFrames += Int64(converted.frameLength)
+                    // Nested inside `lock` on purpose. Exactness needs it:
+                    // `stop()` snapshots the counters while holding `lock`, so
+                    // updating them here means a buffer that made it to disk is
+                    // always in the summary. Nesting is safe because the order
+                    // is only ever lock → counters, never the reverse —
+                    // `recordedDuration` takes the counter lock alone. And it
+                    // costs a reader nothing: the counter lock is held for one
+                    // addition, not for the write above it.
+                    counters.add(frames: Int64(converted.frameLength))
                 }
             } catch {
                 failure = error
@@ -665,11 +716,30 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         downmixSourceFormat = nil
         lock.unlock()
 
-        if hadTap { engineRef?.inputNode.removeTap(onBus: 0) }
-        if engineRef?.isRunning == true { engineRef?.stop() }
-
+        // Tell the user *now* — these are stream yields, they cannot block —
+        // and take the engine apart somewhere else.
         if wasRecording { emit(.paused(.deviceLost)) }
         emit(.failed(.inputDeviceDisconnected))
+
+        // Never inline. `AVAudioEngineConfigurationChange` is delivered
+        // synchronously on whichever thread posted it, which is one of
+        // CoreAudio's own — and Apple explicitly forbids reconfiguring or
+        // stopping the engine from inside the notification. `removeTap` and
+        // `stop()` additionally block until in-flight tap callbacks return, so
+        // doing them here parks a CoreAudio thread inside a CoreAudio
+        // callback. The notification also fires routinely a moment *after*
+        // `engine.start()` — especially once `setInputDevice` has changed
+        // `kAudioOutputUnitProperty_CurrentDevice` — so this ran, and hung,
+        // on the ordinary path of starting a recording rather than only on a
+        // yanked cable.
+        //
+        // Hopping to a serial queue keeps the teardown ordered against any
+        // later teardown while returning the posting thread to CoreAudio
+        // immediately.
+        teardownQueue.async {
+            if hadTap { engineRef?.inputNode.removeTap(onBus: 0) }
+            if engineRef?.isRunning == true { engineRef?.stop() }
+        }
     }
 
     #if os(iOS)
