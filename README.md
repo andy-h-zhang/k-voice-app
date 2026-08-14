@@ -15,6 +15,7 @@ make test       # runs the full offline test suite (no network, no API key)
 make generate   # generates KVoice.xcodeproj from project.yml
 make app-build  # builds the macOS app (Debug)
 make release    # runs the tests, then builds + signs a Release .app
+make install    # builds a Release .app and installs it to /Applications
 make clean      # removes .build/, the generated project, and build/
 ```
 
@@ -23,6 +24,8 @@ make clean      # removes .build/, the generated project, and build/
 `make release` runs `make test` first — a release never ships untested — then
 builds the Release configuration and signs it. The final `.app` path is printed
 in a banner at the end (`build/release/Build/Products/Release/KVoice.app`).
+
+`make install` does the same, then swaps the result into `/Applications/KVoice.app` (quitting a running KVoice first) — the easiest way to get a real, launchable copy out of `build/` and into the normal place; use `sudo make install` if `/Applications` isn't writable.
 
 Signing is decided by what is in your keychain, detected with
 `security find-identity -v -p codesigning`:
