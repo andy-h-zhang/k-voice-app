@@ -162,6 +162,180 @@ public actor SwiftDataProfileSource: ProfileLearningSource {
         }
     }
 
+    // MARK: - People directory (Phase 6)
+    //
+    // Everything below backs the People UI (spec §Voice profiles: "Per-profile
+    // actions: rename, re-enroll, delete, reset learned voice"). They are here
+    // rather than in the app layer for two reasons: the app cannot hold a
+    // `ModelContext` for `Person` without duplicating this actor's
+    // context-per-operation discipline, and every rule they encode — name
+    // identity, what "re-enroll" clears, what "reset" keeps — has to agree with
+    // the fold-in path directly above or the two will drift.
+
+    /// Every person as a display summary, in creation order.
+    ///
+    /// Deliberately *not* `library()`: that returns every stored vector, which
+    /// is the wrong payload for a list of names and counts (see
+    /// ``PersonSummary``).
+    public func people() async throws -> [PersonSummary] {
+        try withContext { context in
+            try context
+                .fetch(
+                    FetchDescriptor<Person>(
+                        sortBy: [SortDescriptor(\.createdAt), SortDescriptor(\.name)]
+                    )
+                )
+                .map(Self.summarize)
+        }
+    }
+
+    /// One person's summary, or nil if the row is gone.
+    public func person(id: UUID) async throws -> PersonSummary? {
+        try withContext { context in
+            try context.person(id: id).map(Self.summarize)
+        }
+    }
+
+    /// Creates a person with no embeddings yet.
+    ///
+    /// Unlike ``upsertPerson(named:at:)``, an existing name is an **error**
+    /// rather than a silent merge: "Add Person" in the UI is a promise to
+    /// create one, and quietly returning someone else's profile is how two
+    /// people's voices end up averaged together.
+    ///
+    /// - Throws: ``ProfileSourceError/invalidName`` or
+    ///   ``ProfileSourceError/duplicateName(_:)``.
+    @discardableResult
+    public func createPerson(named name: String, at date: Date = Date()) async throws -> PersonSummary {
+        try withContext { context in
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { throw ProfileSourceError.invalidName }
+            if let existing = try context.person(named: trimmed) {
+                throw ProfileSourceError.duplicateName(existing.name)
+            }
+            let person = Person(name: trimmed, createdAt: date)
+            context.insert(person)
+            try context.save()
+            return Self.summarize(person)
+        }
+    }
+
+    /// Renames a person, keeping every embedding they have.
+    ///
+    /// Case- and whitespace-only edits to their *own* name are allowed (that is
+    /// how "bob" becomes "Bob"); colliding with a *different* person is refused,
+    /// because `ProfileLibrary` resolves names case-insensitively and two
+    /// identically-named profiles would make matching results ambiguous.
+    @discardableResult
+    public func renamePerson(id: UUID, to newName: String) async throws -> PersonSummary {
+        try withContext { context in
+            let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { throw ProfileSourceError.invalidName }
+            guard let person = try context.person(id: id) else {
+                throw ProfileSourceError.personNotFound(id: id)
+            }
+            if let clash = try context.person(named: trimmed), clash.id != id {
+                throw ProfileSourceError.duplicateName(clash.name)
+            }
+            person.name = trimmed
+            try context.save()
+            return Self.summarize(person)
+        }
+    }
+
+    /// "Reset learned voice", addressed by row identity.
+    ///
+    /// The by-name form is the CLI's (and `ProfileLearningSource`'s) door; the
+    /// UI holds a `PersonSummary` and must not round-trip through a name that a
+    /// rename could have just changed.
+    ///
+    /// - Returns: How many `autolearn` embeddings were removed.
+    @discardableResult
+    public func resetLearnedVoice(forPersonWithID id: UUID) async throws -> Int {
+        try withContext { context in
+            guard let person = try context.person(id: id) else {
+                throw ProfileSourceError.personNotFound(id: id)
+            }
+            let learned = person.embeddings.filter { $0.source == .autolearn }
+            for embedding in learned { context.delete(embedding) }
+            return learned.count
+        }
+    }
+
+    /// Drops **every** embedding, whatever its source — the first half of
+    /// "re-enroll" (spec §Voice profiles).
+    ///
+    /// The person, their name, their creation date, and their assignment to
+    /// existing transcripts all survive; only the voice evidence is cleared, so
+    /// the fresh read that follows is not averaged with the old one.
+    /// `embeddingSequence` is *not* reset: it is a monotonic FIFO cursor, and
+    /// rewinding it would let a new embedding sort before a surviving one.
+    ///
+    /// - Returns: How many embeddings were removed.
+    @discardableResult
+    public func removeAllEmbeddings(forPersonWithID id: UUID) async throws -> Int {
+        try withContext { context in
+            guard let person = try context.person(id: id) else {
+                throw ProfileSourceError.personNotFound(id: id)
+            }
+            let existing = person.embeddings
+            for embedding in existing { context.delete(embedding) }
+            return existing.count
+        }
+    }
+
+    /// Bulk fold-in addressed by row identity — the enrollment and clip-upload
+    /// path, where the target person is already selected in the UI.
+    @discardableResult
+    public func foldIn(
+        contentsOf vectors: [[Float]],
+        intoPersonWithID id: UUID,
+        source: EmbeddingSource,
+        at date: Date = Date(),
+        cap: Int = ProfileFoldPolicy.defaultCap
+    ) async throws -> ProfileFoldOutcome {
+        try withContext { context in
+            guard let person = try context.person(id: id) else {
+                throw ProfileSourceError.personNotFound(id: id)
+            }
+            var evicted = 0
+            var stored = false
+            for vector in vectors {
+                if ProfileFoldPolicy.storableVector(vector) != nil { stored = true }
+                evicted += Self.foldIn(
+                    vector, into: person, source: source, at: date, cap: cap, in: context
+                )
+            }
+            try context.save()
+            return ProfileFoldOutcome(
+                profileID: person.id,
+                name: person.name,
+                created: false,
+                stored: stored,
+                embeddingCount: person.embeddings.count,
+                evictedCount: evicted
+            )
+        }
+    }
+
+    /// Row → `Sendable` summary. The one place the mapping lives.
+    private static func summarize(_ person: Person) -> PersonSummary {
+        var counts: [EmbeddingSource: Int] = [:]
+        for embedding in person.embeddings {
+            counts[embedding.source, default: 0] += 1
+        }
+        let slots = person.speakerSlots
+        let recordings = Set(slots.compactMap { $0.recording?.id })
+        return PersonSummary(
+            id: person.id,
+            name: person.name,
+            createdAt: person.createdAt,
+            embeddingCounts: counts,
+            assignedSlotCount: slots.count,
+            assignedRecordingCount: recordings.count
+        )
+    }
+
     // MARK: - Import / export
 
     /// Replaces the SwiftData library with a JSON one (the CLI's file).
@@ -235,15 +409,20 @@ public actor SwiftDataProfileSource: ProfileLearningSource {
         context.insert(row)
         person.embeddings.append(row)
 
-        let overflow = ProfileFoldPolicy.evictionCount(
-            currentCount: person.embeddings.count,
-            cap: cap
-        )
+        // `context.delete` does not take the row out of `person.embeddings`
+        // until the context is saved, and a bulk fold-in saves once at the end.
+        // Counting the relationship array directly would therefore re-evict
+        // rows already marked for deletion on the next vector — harmless for
+        // the final state (deleting twice is a no-op) but it over-reports
+        // `evictedCount`, which is a number the UI shows the user. `isDeleted`
+        // is the live view.
+        let live = person.orderedEmbeddings.filter { !$0.isDeleted }
+        let overflow = ProfileFoldPolicy.evictionCount(currentCount: live.count, cap: cap)
         guard overflow > 0 else { return 0 }
 
         // Oldest-first by insertion order, matching the Phase-1 array
         // semantics exactly (dates tie on bulk folds; sequence never does).
-        for victim in person.orderedEmbeddings.prefix(overflow) {
+        for victim in live.prefix(overflow) {
             context.delete(victim)
         }
         return overflow
@@ -253,6 +432,11 @@ public actor SwiftDataProfileSource: ProfileLearningSource {
 /// Failures specific to a profile source.
 public enum ProfileSourceError: Error, Sendable, Equatable {
     case personNotFound(id: UUID)
+    /// A name that is empty once trimmed. Phase 6.
+    case invalidName
+    /// Another person already answers to this name (case-insensitively).
+    /// Carries the *existing* spelling, so the message can show it. Phase 6.
+    case duplicateName(String)
 }
 
 extension ProfileSourceError: LocalizedError {
@@ -260,6 +444,11 @@ extension ProfileSourceError: LocalizedError {
         switch self {
         case .personNotFound(let id):
             return "No person with id \(id) in the profile library."
+        case .invalidName:
+            return "A person needs a name."
+        case .duplicateName(let name):
+            return "“\(name)” is already in your people list. Names have to be unique so "
+                + "matched speakers are never ambiguous."
         }
     }
 }

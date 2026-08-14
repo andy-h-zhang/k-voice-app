@@ -3,12 +3,13 @@ import Observation
 
 /// Sections in the sidebar.
 ///
-/// v1 ships two. `people` and the rest of Settings arrive in Phase 6 — adding
-/// them is a case here plus a view in ``RootView``, which is the seam this
-/// enum exists to keep clean.
+/// Phase 6 added `people`, which cost exactly what this enum was built to cost:
+/// a case here and a view in ``RootView``. Settings is deliberately *not* a
+/// case — it is a `Settings` scene (⌘,), where macOS users expect it.
 enum SidebarSection: String, Hashable, Identifiable, CaseIterable {
     case record
     case recordings
+    case people
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum SidebarSection: String, Hashable, Identifiable, CaseIterable {
         switch self {
         case .record: return "Record"
         case .recordings: return "Recordings"
+        case .people: return "People"
         }
     }
 
@@ -23,6 +25,7 @@ enum SidebarSection: String, Hashable, Identifiable, CaseIterable {
         switch self {
         case .record: return "mic.circle"
         case .recordings: return "waveform"
+        case .people: return "person.2"
         }
     }
 }

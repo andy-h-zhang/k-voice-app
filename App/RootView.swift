@@ -3,9 +3,10 @@ import SwiftUI
 /// The window: a standard `NavigationSplitView` with the app's sections in the
 /// sidebar.
 ///
-/// Two columns rather than three because Phase 4 has no transcript editor yet.
-/// Phase 5 turns the recordings detail into its own split — the seam is
-/// ``LibraryModel/selection``, which already tracks the selected row.
+/// Two columns rather than three. Sections that need their own list-plus-detail
+/// — People does, and Phase 5's transcript editor will — split *inside* the
+/// detail column (see ``PeopleView``) rather than turning this into a
+/// three-column view, so one section's shape never dictates another's.
 struct RootView: View {
 
     @Environment(AppServices.self) private var services
@@ -21,7 +22,9 @@ struct RootView: View {
                 Section("Library") {
                     row(.recordings)
                 }
-                // Phase 6 adds People here, alongside the Settings scene.
+                Section("Voices") {
+                    row(.people)
+                }
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
         } detail: {
@@ -30,6 +33,8 @@ struct RootView: View {
                 RecordView()
             case .recordings:
                 LibraryView()
+            case .people:
+                PeopleView()
             }
         }
     }

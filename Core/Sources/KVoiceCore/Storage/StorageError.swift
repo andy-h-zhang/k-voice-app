@@ -12,6 +12,14 @@ public enum StorageError: Error, Equatable, Sendable {
     case fileNotFound(path: String)
     /// A move would have clobbered something already there.
     case destinationExists(path: String)
+    /// A library move was asked to target a folder that already has contents.
+    /// Phase 6 — see `RecordingStore.moveRoot(to:)`.
+    case destinationNotEmpty(path: String)
+    /// A library move was asked to target a folder inside the library itself.
+    case destinationInsideSource(source: String, destination: String)
+    /// Moving the library root failed part-way. `rolledBack` reports whether
+    /// the items already moved were put back.
+    case rootMoveFailed(from: String, to: String, reason: String, rolledBack: Bool)
     /// A rename failed part-way.
     ///
     /// `rolledBack` reports whether the files moved before the failure were
@@ -35,6 +43,16 @@ extension StorageError: LocalizedError {
             return "No file at \(path)."
         case .destinationExists(let path):
             return "Something already exists at \(path)."
+        case .destinationNotEmpty(let path):
+            return "\(path) already has files in it. Choose an empty or brand-new folder — "
+                + "KVoice moves its whole library there and will not merge it with something else."
+        case .destinationInsideSource(let source, let destination):
+            return "\(destination) is inside \(source), so the library cannot be moved into it."
+        case .rootMoveFailed(let from, let to, let reason, let rolledBack):
+            let recovery = rolledBack
+                ? "Everything moved so far was put back, so the library is still at \(from)."
+                : "WARNING: some items could NOT be put back; check both \(from) and \(to) on disk."
+            return "Could not move the library from \(from) to \(to): \(reason) \(recovery)"
         case .renameFailed(let from, let to, let reason, let rolledBack):
             let recovery = rolledBack
                 ? "The original names were restored."

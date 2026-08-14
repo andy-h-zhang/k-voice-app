@@ -37,6 +37,21 @@ final class AppServices {
     let recorder: RecordingSessionModel
     let navigation = NavigationModel()
 
+    /// The one on-device embedder, shared by transcription *and* enrollment.
+    ///
+    /// Phase 6 needs a handle on it: enrolling a voice runs the same CoreML
+    /// models a transcription's speaker-matching stage does, and a second
+    /// instance would mean a second ~100 MB download and a second copy of the
+    /// models in memory.
+    let speakerModels: SpeakerModels
+
+    /// The People section (spec §Voice profiles).
+    let people: PeopleModel
+
+    /// Settings state that has to outlive the Settings window — chiefly a
+    /// storage-folder move that is waiting on a relaunch.
+    let appSettings: AppSettingsModel
+
     /// Whether an AssemblyAI key can be resolved right now — the environment
     /// variable or the Keychain (``APIKeyResolver``).
     ///
@@ -77,6 +92,8 @@ final class AppServices {
         self.library = library
 
         let speakerModels = SpeakerModels(state: speakerModelState)
+        self.speakerModels = speakerModels
+
         let transcription = TranscriptionCoordinator(
             container: container,
             settings: settings,
@@ -87,11 +104,25 @@ final class AppServices {
         )
         self.transcription = transcription
 
-        self.recorder = RecordingSessionModel(
+        let recorder = RecordingSessionModel(
             settings: settings,
             store: recordingStore,
             library: library,
             transcription: transcription
+        )
+        self.recorder = recorder
+
+        let people = PeopleModel(
+            profiles: profiles,
+            speakerModels: speakerModels,
+            speakerModelState: speakerModelState,
+            settings: settings
+        )
+        self.people = people
+
+        self.appSettings = AppSettingsModel(
+            settings: settings,
+            store: recordingStore
         )
 
         self.hasAPIKey = APIKeyResolver.resolve(keychain: keychain) != nil
@@ -100,7 +131,31 @@ final class AppServices {
 
         // A job that reaches a terminal state has written participant names
         // and a duration the list is showing — so the list re-reads itself.
-        jobStatus.onFinished = { [weak library] _ in library?.reload() }
+        // It may also have *auto-learned* a voice, which changes embedding
+        // counts (and can add a whole person) in the People section.
+        jobStatus.onFinished = { [weak library, weak people] _ in
+            library?.reload()
+            Task { await people?.reload() }
+        }
+
+        // Deleting or renaming a person changes the participant names the
+        // library list is showing, so it re-reads itself for the same reason.
+        people.onProfilesChanged = { [weak library] in library?.reload() }
+
+        // Moving the library folder moves files out from under anything
+        // writing into them, so Settings asks first whether that is safe.
+        appSettings.busyReason = { [weak recorder, weak jobStatus] in
+            if recorder?.isActive == true {
+                return "a recording is in progress"
+            }
+            let running = jobStatus?.running.count ?? 0
+            if running > 0 {
+                return running == 1
+                    ? "a transcription is still running"
+                    : "\(running) transcriptions are still running"
+            }
+            return nil
+        }
 
         // The quit guard runs from `NSApplicationDelegate`, which SwiftUI
         // instantiates outside this object graph, so it needs a way back in.

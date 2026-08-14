@@ -230,6 +230,97 @@ public struct RecordingStore: Sendable {
         }
     }
 
+    // MARK: - Moving the whole library (Phase 6)
+
+    /// Moves the entire library — every recording folder *and* the SwiftData
+    /// store file beside them — to a new root, and returns a store pointing at
+    /// it (spec §Settings: "Storage folder").
+    ///
+    /// ## The semantics, stated honestly
+    ///
+    /// - **The destination must be empty or absent.** Merging two libraries
+    ///   would silently interleave two sets of recording folders and two
+    ///   `KVoice.store` files; there is no correct answer for the second one,
+    ///   so this refuses rather than guesses.
+    /// - **Contents move, not the folder itself.** Every child of the root is
+    ///   moved individually, so the destination a user just created in the open
+    ///   panel is a valid target. The consequence is that the *old* root folder
+    ///   is left behind, empty, for the user to delete — deleting a folder the
+    ///   user chose is not this type's call.
+    /// - **Rollback on partial failure.** Moves already made are undone, and
+    ///   ``StorageError/rootMoveFailed(from:to:reason:rolledBack:)`` reports
+    ///   whether that succeeded. Same contract as `rename`.
+    /// - **Hidden files stay put.** `contentsOfDirectory` skips them, so a
+    ///   stray `.DS_Store` remains in the old folder. Nothing KVoice writes is
+    ///   hidden — including SQLite's `-wal`/`-shm` sidecars, which do move.
+    ///
+    /// The caller is responsible for the part this cannot do: an open
+    /// `ModelContainer` holds the store file by path, so the app must not be
+    /// mid-write, and it has to reopen (in practice, relaunch) afterwards.
+    ///
+    /// - Returns: A store rooted at `destination`.
+    public func moveRoot(to destination: URL) throws -> RecordingStore {
+        let source = rootURL.standardizedFileURL
+        let target = destination.standardizedFileURL
+        guard source != target else { return self }
+
+        // Moving a folder's contents into a folder inside itself would either
+        // recurse or lose data depending on enumeration order.
+        guard !target.path.hasPrefix(source.path + "/") else {
+            throw StorageError.destinationInsideSource(source: source.path, destination: target.path)
+        }
+
+        if operations.fileExists(at: target) {
+            guard operations.isDirectory(at: target) else {
+                throw StorageError.notADirectory(path: target.path)
+            }
+            guard try operations.contentsOfDirectory(at: target).isEmpty else {
+                throw StorageError.destinationNotEmpty(path: target.path)
+            }
+        } else {
+            do {
+                try operations.createDirectory(at: target)
+            } catch {
+                throw StorageError.rootCreationFailed(
+                    path: target.path,
+                    reason: error.localizedDescription
+                )
+            }
+        }
+
+        // A library that was never written to is a settings change, not a move.
+        guard operations.fileExists(at: source) else {
+            return RecordingStore(rootURL: target, operations: operations)
+        }
+        guard operations.isDirectory(at: source) else {
+            throw StorageError.notADirectory(path: source.path)
+        }
+
+        var completed: [(from: URL, to: URL)] = []
+        do {
+            let contents = try operations.contentsOfDirectory(at: source)
+            for url in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                let itemDestination = target.appendingPathComponent(url.lastPathComponent)
+                guard !operations.fileExists(at: itemDestination) else {
+                    throw StorageError.destinationExists(path: itemDestination.path)
+                }
+                try operations.moveItem(at: url, to: itemDestination)
+                completed.append((from: url, to: itemDestination))
+            }
+        } catch {
+            let rolledBack = rollBack(completed)
+            let reason = (error as? StorageError)?.errorDescription ?? error.localizedDescription
+            throw StorageError.rootMoveFailed(
+                from: source.path,
+                to: target.path,
+                reason: reason,
+                rolledBack: rolledBack
+            )
+        }
+
+        return RecordingStore(rootURL: target, operations: operations)
+    }
+
     /// Undoes completed moves, newest first. Returns whether every undo
     /// succeeded.
     private func rollBack(_ completed: [(from: URL, to: URL)]) -> Bool {
