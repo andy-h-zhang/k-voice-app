@@ -12,10 +12,25 @@ struct LibraryView: View {
     @State private var draftTitle = ""
     @State private var pendingDelete: LibraryRow?
 
+    /// The recording whose transcript editor is pushed on the stack.
+    ///
+    /// Local `@State` rather than a `LibraryModel` property: which screen is on
+    /// top is a fact about this window, not about the library.
+    @State private var openRecordingID: UUID?
+
     var body: some View {
+        NavigationStack {
+            content
+                .navigationDestination(item: $openRecordingID) { id in
+                    TranscriptEditorScreen(recordingID: id)
+                }
+        }
+    }
+
+    private var content: some View {
         @Bindable var library = services.library
 
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             if !services.hasAPIKey && !library.rows.isEmpty {
                 APIKeyBanner()
                     .padding([.horizontal, .top], 12)
@@ -35,7 +50,8 @@ struct LibraryView: View {
                             row: row,
                             editingID: $editingID,
                             draftTitle: $draftTitle,
-                            onRequestDelete: { pendingDelete = $0 }
+                            onRequestDelete: { pendingDelete = $0 },
+                            onOpenTranscript: { openRecordingID = $0.id }
                         )
                         .tag(row.id)
                     }
