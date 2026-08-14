@@ -145,7 +145,7 @@ struct RecordView: View {
         }
         .font(.callout)
         .foregroundStyle(.secondary)
-        .help("Input device selection arrives in Settings.")
+        .help("Change the input device in Settings.")
     }
 
     private var microphoneDeniedBanner: some View {

@@ -16,6 +16,8 @@ struct RecordingRowView: View {
     @Binding var editingID: UUID?
     @Binding var draftTitle: String
     let onRequestDelete: (LibraryRow) -> Void
+    /// Pushes the Phase-5 transcript editor for this recording.
+    let onOpenTranscript: (LibraryRow) -> Void
 
     @Environment(AppServices.self) private var services
     @FocusState private var titleFocused: Bool
@@ -27,6 +29,13 @@ struct RecordingRowView: View {
     private var isEditing: Bool { editingID == row.id }
     private var isRunning: Bool { services.jobStatus.running.contains(row.id) }
     private var canTranscribe: Bool { services.hasAPIKey }
+
+    /// Whether there is anything to edit or export yet.
+    private var hasTranscript: Bool { row.snapshot.utteranceCount > 0 }
+
+    private var audioURL: URL {
+        row.folderURL.appendingPathComponent(row.snapshot.audioFileName)
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -45,12 +54,40 @@ struct RecordingRowView: View {
 
             Spacer(minLength: 12)
 
+            audioDragHandle
+
             StatusBadge(status: status, detail: services.jobStatus.detail(for: row.id))
 
             primaryAction
         }
         .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        // Double-click opens the transcript, as every other macOS library does.
+        .onTapGesture(count: 2) {
+            guard hasTranscript else { return }
+            onOpenTranscript(row)
+        }
         .contextMenu { menu }
+    }
+
+    /// Drag-out of the audio (spec §Export), on a grab handle rather than the
+    /// whole row.
+    ///
+    /// `onDrag` applied to the row wraps everything inside it in a drag
+    /// gesture, and on macOS that takes precedence over the `List`'s own
+    /// click-to-select and over the double-click that opens the transcript —
+    /// so the row-wide version cost two working interactions to add one. A
+    /// dedicated handle keeps all three.
+    private var audioDragHandle: some View {
+        Image(systemName: "waveform")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .onDrag { FileDrag.provider(for: audioURL) }
+            .help("Drag the audio file out of KVoice.")
+            .accessibilityLabel("Drag audio file")
     }
 
     // MARK: - Title
@@ -121,7 +158,10 @@ struct RecordingRowView: View {
                 .help(retryHelp)
 
         default:
-            EmptyView()
+            if hasTranscript {
+                Button("Transcript") { onOpenTranscript(row) }
+                    .help("Open the transcript editor.")
+            }
         }
     }
 
@@ -134,6 +174,9 @@ struct RecordingRowView: View {
 
     @ViewBuilder
     private var menu: some View {
+        Button("Open Transcript") { onOpenTranscript(row) }
+            .disabled(!hasTranscript)
+
         Button("Rename…") { beginRename() }
 
         if status.kind == .recorded {
@@ -151,6 +194,24 @@ struct RecordingRowView: View {
                 .disabled(isRunning)
         }
         Divider()
+
+        // Phase 7's app half: the same menu the editor's toolbar carries.
+        // Exporting reveals the file, since a library row has nowhere to
+        // report success.
+        RecordingExportMenu(
+            recordingID: row.id,
+            hasTranscript: hasTranscript,
+            container: services.container,
+            libraryRoot: services.libraryRoot,
+            defaultFormat: services.settings.defaultExportFormat
+        ) { result in
+            switch result {
+            case .success(let url):
+                FinderIntegration.reveal(url)
+            case .failure(let error):
+                services.library.errorMessage = "Could not export: \(LibraryModel.describe(error))"
+            }
+        }
 
         Button("Show in Finder") { FinderIntegration.reveal(row.folderURL) }
 
