@@ -83,7 +83,14 @@ public struct AssemblyAIClient: TranscriptionProvider {
         self.sleep = sleep
     }
 
-    /// Builds a client from `ASSEMBLYAI_API_KEY`.
+    /// Builds a client from `ASSEMBLYAI_API_KEY` and nothing else.
+    ///
+    /// Deliberately does **not** consult the Keychain: a bare
+    /// `fromEnvironment` must stay a pure function of its argument so tests
+    /// can call it without a system dialog appearing on someone's screen. Use
+    /// ``resolved(environment:keychain:session:configuration:)`` for the
+    /// fallback behavior.
+    ///
     /// - Throws: `TranscriptionError.missingAPIKey` when unset or blank.
     public static func fromEnvironment(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -92,6 +99,24 @@ public struct AssemblyAIClient: TranscriptionProvider {
     ) throws -> AssemblyAIClient {
         let key = environment["ASSEMBLYAI_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let key, !key.isEmpty else { throw TranscriptionError.missingAPIKey }
+        return AssemblyAIClient(apiKey: key, session: session, configuration: configuration)
+    }
+
+    /// Builds a client from the environment, falling back to a stored key.
+    ///
+    /// `ASSEMBLYAI_API_KEY` still wins, so every documented CLI invocation
+    /// behaves exactly as it did in Phase 1; the Keychain is only consulted
+    /// when the variable is absent or blank. That is what lets the CLI and the
+    /// app share one key without the CLI growing a settings file.
+    ///
+    /// - Throws: `TranscriptionError.missingAPIKey` when neither source has one.
+    public static func resolved(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        keychain: any APIKeyStore = KeychainAPIKeyStore(),
+        session: URLSession = .shared,
+        configuration: Configuration = Configuration()
+    ) throws -> AssemblyAIClient {
+        let key = try APIKeyResolver.require(environment: environment, keychain: keychain)
         return AssemblyAIClient(apiKey: key, session: session, configuration: configuration)
     }
 
@@ -150,6 +175,15 @@ public struct AssemblyAIClient: TranscriptionProvider {
     /// `GET /v2/transcript/{id}`.
     public func poll(id: String) async throws -> TranscriptResponse {
         try await pollRaw(id: id).response
+    }
+
+    /// `TranscriptionProvider`'s raw-body hook, backed by `pollRaw`. Overrides
+    /// the protocol's re-encoding default with the genuine transport bytes.
+    public func pollPersistingRaw(
+        id: String,
+        persist: @escaping @Sendable (Data) throws -> Void
+    ) async throws -> TranscriptResponse {
+        try await pollRaw(id: id, persist: persist).response
     }
 
     // MARK: - Raw-body access (api-notes decision 1)

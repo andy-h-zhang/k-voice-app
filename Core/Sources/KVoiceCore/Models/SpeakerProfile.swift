@@ -75,15 +75,10 @@ public struct SpeakerProfile: Codable, Sendable, Equatable, Identifiable {
 
     /// Adds an embedding, enforcing the FIFO cap.
     ///
-    /// This is the auto-learn core (spec §4). Two deliberate choices:
-    ///
-    /// - **The vector is L2-normalized on the way in**, so a profile is a set
-    ///   of unit vectors regardless of what the backend returned.
-    /// - **Eviction is strict oldest-first, regardless of source.** Enrollment
-    ///   embeddings are not privileged: plan §3 risk 9 wants real-meeting
-    ///   audio to dominate over time, because a 30-second scripted read is a
-    ///   poor model of how someone talks in a meeting. `resetLearnedVoice()`
-    ///   remains available when a user wants to undo learning.
+    /// This is the auto-learn core (spec §4). The two rules — normalize on the
+    /// way in, evict strictly oldest-first regardless of source — live in
+    /// ``ProfileFoldPolicy``, because Phase 3's SwiftData profile source has to
+    /// behave identically and a second copy of the arithmetic would drift.
     ///
     /// - Returns: The embeddings evicted to stay within `cap`.
     @discardableResult
@@ -93,8 +88,7 @@ public struct SpeakerProfile: Codable, Sendable, Equatable, Identifiable {
         at date: Date = Date(),
         cap: Int = SpeakerProfile.defaultEmbeddingCap
     ) -> [ProfileEmbedding] {
-        let normalized = VectorMath.l2Normalized(vector)
-        guard VectorMath.l2Norm(normalized) > 0 else { return [] }
+        guard let normalized = ProfileFoldPolicy.storableVector(vector) else { return [] }
 
         embeddings.append(ProfileEmbedding(vector: normalized, addedAt: date, source: source))
         return trim(to: cap)
@@ -132,13 +126,8 @@ public struct SpeakerProfile: Codable, Sendable, Equatable, Identifiable {
 
     @discardableResult
     private mutating func trim(to cap: Int) -> [ProfileEmbedding] {
-        guard cap > 0 else {
-            let all = embeddings
-            embeddings.removeAll()
-            return all
-        }
-        guard embeddings.count > cap else { return [] }
-        let overflow = embeddings.count - cap
+        let overflow = ProfileFoldPolicy.evictionCount(currentCount: embeddings.count, cap: cap)
+        guard overflow > 0 else { return [] }
         let evicted = Array(embeddings.prefix(overflow))
         embeddings.removeFirst(overflow)
         return evicted

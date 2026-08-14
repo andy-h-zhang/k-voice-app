@@ -97,9 +97,16 @@ extension TranscriptionError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "No AssemblyAI API key. Set ASSEMBLYAI_API_KEY in the environment."
+            return "No AssemblyAI API key.\n\(APIKeyResolver.guidance)"
         case .unauthorized(let message):
-            return "AssemblyAI rejected the API key (401).\(Self.suffix(message))"
+            // A key *was* found — so the fix is replacing it, not supplying
+            // one. Naming both sources tells the user which one to go edit.
+            return """
+                AssemblyAI rejected the API key (401).\(Self.suffix(message)) \
+                Replace the key in \(APIKeyResolver.environmentVariable) or in the \
+                app's Settings (Keychain), whichever supplied it — \
+                \(APIKeyResolver.environmentVariable) takes precedence when both are set.
+                """
         case .forbidden(let message):
             return """
                 AssemblyAI returned 403.\(Self.suffix(message)) \

@@ -28,7 +28,8 @@ struct Speakerlab: AsyncParsableCommand {
               64 usage error (bad arguments)
 
             ENVIRONMENT
-              ASSEMBLYAI_API_KEY  required by `transcribe` only.
+              ASSEMBLYAI_API_KEY  required by `transcribe` only. Falls back to the
+                                  Keychain entry the app stores when unset.
 
             The ~100 MB speaker models download once, at runtime, on first use of \
             `enroll` / `identify` / `eval`. See `speakerlab enroll --help` for \

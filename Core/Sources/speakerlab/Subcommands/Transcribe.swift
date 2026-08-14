@@ -12,7 +12,8 @@ struct Transcribe: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Upload a recording to AssemblyAI and save the raw transcript JSON.",
         discussion: """
-            Requires ASSEMBLYAI_API_KEY in the environment.
+            Requires ASSEMBLYAI_API_KEY in the environment, or a key saved in the \
+            Keychain by the app (the environment variable wins when both exist).
 
             Uploads the file (raw bytes, streamed from disk), creates a transcript with \
             speaker diarization enabled, then polls with exponential backoff until the \
@@ -67,7 +68,10 @@ struct Transcribe: AsyncParsableCommand {
                 )
             }
 
-            let client = try AssemblyAIClient.fromEnvironment(
+            // ASSEMBLYAI_API_KEY still wins; the Keychain entry the app stores
+            // is only consulted when it is absent, so every documented
+            // invocation behaves exactly as it did in Phase 1.
+            let client = try AssemblyAIClient.resolved(
                 configuration: .init(speechModels: speechModels)
             )
 
