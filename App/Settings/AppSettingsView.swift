@@ -31,7 +31,10 @@ struct AppSettingsView: View {
         .formStyle(.grouped)
         .frame(width: 560)
         .frame(minHeight: 520)
-        .onAppear { services.appSettings.refreshInputDevices() }
+        .task {
+            services.appSettings.syncInputChoiceFromSettings()
+            await services.appSettings.refreshInputDevices()
+        }
         .alert(
             "Settings",
             isPresented: Binding(
@@ -257,8 +260,10 @@ private struct AudioSection: View {
                 HStack(spacing: 8) {
                     Text(model.effectiveDeviceName)
                         .foregroundStyle(.secondary)
-                    Button("Refresh") { services.appSettings.refreshInputDevices() }
-                        .buttonStyle(.borderless)
+                    Button("Refresh") {
+                        Task { await services.appSettings.refreshInputDevices() }
+                    }
+                    .buttonStyle(.borderless)
                 }
             }
 

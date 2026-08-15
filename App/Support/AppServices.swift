@@ -33,6 +33,9 @@ final class AppServices {
     let jobStatus: JobStatusStore
     let speakerModelState: SpeakerModelState
     let library: LibraryModel
+
+    /// Plays a recording straight from the library list, without opening it.
+    let libraryPlayback = LibraryPlayback()
     let transcription: TranscriptionCoordinator
     let recorder: RecordingSessionModel
     let navigation = NavigationModel()
@@ -120,10 +123,11 @@ final class AppServices {
         )
         self.people = people
 
-        self.appSettings = AppSettingsModel(
+        let appSettings = AppSettingsModel(
             settings: settings,
             store: recordingStore
         )
+        self.appSettings = appSettings
 
         self.hasAPIKey = APIKeyResolver.resolve(keychain: keychain) != nil
 
@@ -136,6 +140,17 @@ final class AppServices {
         jobStatus.onFinished = { [weak library, weak people] _ in
             library?.reload()
             Task { await people?.reload() }
+        }
+
+        // One input-device setting, two controls (the record screen's picker
+        // and Settings), and the Settings scene is its own window — so both can
+        // be on screen at once and each has to hear about the other's change.
+        appSettings.onInputDeviceChanged = { [weak recorder] in
+            recorder?.syncInputChoiceFromSettings()
+            Task { await recorder?.refreshInputDevice() }
+        }
+        recorder.onInputDeviceChanged = { [weak appSettings] in
+            appSettings?.syncInputChoiceFromSettings()
         }
 
         // Deleting or renaming a person changes the participant names the

@@ -68,7 +68,40 @@ struct RootView: View {
             // size to resize the window to. Without this, a section whose
             // content has a smaller ideal size drags the window down with it —
             // the "switching menus resizes the window back to default" bug.
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            //
+            // `idealWidth`/`idealHeight` are the load-bearing part, and they are
+            // what keeps the sidebar on screen. `NavigationSplitView` sizes its
+            // columns from what the detail *reports* it would like, and a
+            // `Text` marked `.fixedSize(horizontal: false, vertical: true)` —
+            // the idiom this app uses in every banner and empty state to stop
+            // macOS truncating a paragraph — reports the width of the whole
+            // string on one line. That is well over a thousand points, it
+            // propagates all the way up here, and the split view answers it by
+            // squeezing the sidebar until its rows have no room left to draw:
+            // the "left panel is empty and I can't click anything" bug, in
+            // People (whose empty state is mostly such paragraphs) and on the
+            // record screen the moment a banner appears — which is exactly what
+            // pressing Stop does.
+            //
+            // A stated ideal ends the negotiation. The detail column now always
+            // answers 640×480 no matter what is inside it, the sidebar keeps
+            // the width its own `navigationSplitViewColumnWidth` asks for, and
+            // paragraphs go back to wrapping inside whatever width they are
+            // actually given.
+            .frame(
+                minWidth: 0,
+                idealWidth: 640,
+                maxWidth: .infinity,
+                minHeight: 0,
+                idealHeight: 480,
+                maxHeight: .infinity
+            )
+            // The library player's only controls are on the library rows, so
+            // leaving a two-hour meeting playing behind another section would
+            // give the user audio with no way to stop it.
+            .onChange(of: navigation.section) { _, section in
+                if section != .recordings { services.libraryPlayback.stop() }
+            }
         }
     }
 

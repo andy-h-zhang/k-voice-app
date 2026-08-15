@@ -198,36 +198,33 @@ struct PersonDetailView: View {
 
     // MARK: - Actions
 
+    // Each row falls back to a column when the detail pane is too narrow to
+    // hold it — which it is at the window's minimum width, where this pane is
+    // about 300 points and "Reset Learned Voice" alone wants half of that.
     private var actions: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Button {
-                    onEnroll()
-                } label: {
-                    Label(person.hasVoice ? "Record More" : "Record a Voice…", systemImage: "mic")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    addVoiceButtons
+                    Spacer()
                 }
-
-                Button {
-                    onAddClips()
-                } label: {
-                    Label("Add Audio Files…", systemImage: "waveform.badge.plus")
+                VStack(alignment: .leading, spacing: 10) {
+                    addVoiceButtons
                 }
-
-                Spacer()
             }
 
-            HStack(spacing: 10) {
-                Button("Re-enroll…", action: onReEnroll)
-                    .disabled(!person.hasVoice)
-                    .help("Clear every stored sample and record a fresh 30-second read")
-
-                Button("Reset Learned Voice", action: onResetLearned)
-                    .disabled(person.learnedEmbeddingCount == 0)
-                    .help("Remove only what KVoice picked up from recordings")
-
-                Spacer()
-
-                Button("Delete…", role: .destructive, action: onDelete)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    reEnrollButton
+                    resetLearnedButton
+                    Spacer()
+                    deleteButton
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    reEnrollButton
+                    resetLearnedButton
+                    deleteButton
+                }
             }
 
             Text(resetExplanation)
@@ -235,6 +232,37 @@ struct PersonDetailView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    @ViewBuilder
+    private var addVoiceButtons: some View {
+        Button {
+            onEnroll()
+        } label: {
+            Label(person.hasVoice ? "Record More" : "Record a Voice…", systemImage: "mic")
+        }
+
+        Button {
+            onAddClips()
+        } label: {
+            Label("Add Audio Files…", systemImage: "waveform.badge.plus")
+        }
+    }
+
+    private var reEnrollButton: some View {
+        Button("Re-enroll…", action: onReEnroll)
+            .disabled(!person.hasVoice)
+            .help("Clear every stored sample and record a fresh 30-second read")
+    }
+
+    private var resetLearnedButton: some View {
+        Button("Reset Learned Voice", action: onResetLearned)
+            .disabled(person.learnedEmbeddingCount == 0)
+            .help("Remove only what KVoice picked up from recordings")
+    }
+
+    private var deleteButton: some View {
+        Button("Delete…", role: .destructive, action: onDelete)
     }
 
     private var resetExplanation: String {

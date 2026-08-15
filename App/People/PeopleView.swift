@@ -80,24 +80,35 @@ struct PeopleView: View {
                 onImport: { enrollment = .clips(for: nil) }
             )
         } else {
-            // No `idealWidth`, and minimums low enough to fit inside the
-            // window's own floor: this split view's preferred width used to be
-            // the widest thing in the app (200 + 380 + the sidebar), so
-            // selecting People both resized the window and set the effective
-            // limit on how narrow it could ever be made again.
+            // An `HStack` and a `Divider`, not an `HSplitView`.
             //
-            // These two numbers are still the widest minimum in the app, which
-            // makes them the ones that decide whether the *sidebar* can survive
-            // a narrow window: `NavigationSplitView` collapses the sidebar when
-            // the window cannot fit sidebar-min + detail-min. 160 + 280 = 440
-            // against a 160-point sidebar floor and a 720-point window floor
-            // leaves 120 points of slack, so it never has to. See the budget
-            // spelled out in `RootView`.
-            HSplitView {
+            // `HSplitView` gives each pane the width that pane asks for and
+            // then lets the total run past its own bounds — so the person
+            // detail, whose ideal width is its 640-point reading column, was
+            // drawn half outside the window with its Delete button off the
+            // right edge. It has no way to say "share what is actually here".
+            //
+            // A fixed list column and a detail that takes the rest cannot
+            // overflow, and it is the shape Mail and Notes use for the same
+            // job. The width the user drags is still there — it is the window's
+            // own sidebar divider, one level out.
+            HStack(spacing: 0) {
                 list(selection: $model.selection)
-                    .frame(minWidth: 160, maxWidth: 340)
+                    .frame(width: 200)
+
+                Divider()
+
                 detail
-                    .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
+                    // `idealWidth` for the same reason as `RootView`'s: this
+                    // column's content is paragraphs and a 640-point reading
+                    // frame, and an unclamped ideal propagates out to the
+                    // window's split view and squeezes the sidebar away.
+                    .frame(
+                        idealWidth: 360,
+                        maxWidth: .infinity,
+                        maxHeight: .infinity,
+                        alignment: .topLeading
+                    )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -381,66 +392,99 @@ struct PeopleEmptyState: View {
     let onEnroll: () -> Void
     let onImport: () -> Void
 
-    var body: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "person.2.badge.gearshape")
-                .font(.system(size: 46))
-                .foregroundStyle(.tertiary)
-
-            VStack(spacing: 8) {
-                Text("No people yet")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Text(
-                    """
-                    Transcription hands back “Speaker A” and “Speaker B”. KVoice turns those \
-                    into names by comparing each voice against the profiles here — so until \
-                    someone is in this list, every speaker stays anonymous.
-                    """
-                )
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 460)
-            }
-
+    // The two cards, either side by side or stacked. `ViewThatFits` picks the
+    // first arrangement that fits the width it is given, which in this window
+    // is often under 500 points — where two columns leave each card narrow
+    // enough to truncate its own buttons.
+    private var cards: some View {
+        ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: 16) {
-                ExplainerCard(
-                    icon: "mic.badge.plus",
-                    title: "Enroll a voice",
-                    message: """
-                        They read half a minute of text on screen, or you add clips of them \
-                        talking. Best when you know who will be in the meeting.
-                        """,
-                    actionTitle: "Record a Voice…",
-                    action: onEnroll,
-                    secondaryTitle: "Add Audio Files…",
-                    secondaryAction: onImport
-                )
-
-                ExplainerCard(
-                    icon: "wand.and.sparkles",
-                    title: "Or let it auto-learn",
-                    message: """
-                        Name an unknown speaker in a transcript and KVoice remembers that \
-                        voice — the profile is created for you, and gets better with every \
-                        recording. Enrolling just skips the first miss.
-                        """,
-                    actionTitle: nil,
-                    action: nil,
-                    secondaryTitle: nil,
-                    secondaryAction: nil
-                )
+                enrollCard(sideBySide: true)
+                autoLearnCard(sideBySide: true)
             }
-            .frame(maxWidth: 720)
+            VStack(spacing: 16) {
+                enrollCard(sideBySide: false)
+                autoLearnCard(sideBySide: false)
+            }
         }
-        .padding(40)
+        .frame(maxWidth: 720)
+    }
+
+    private func enrollCard(sideBySide: Bool) -> some View {
+        ExplainerCard(
+            sideBySide: sideBySide,
+            icon: "mic.badge.plus",
+            title: "Enroll a voice",
+            message: """
+                They read half a minute of text on screen, or you add clips of them \
+                talking. Best when you know who will be in the meeting.
+                """,
+            actionTitle: "Record a Voice…",
+            action: onEnroll,
+            secondaryTitle: "Add Audio Files…",
+            secondaryAction: onImport
+        )
+    }
+
+    private func autoLearnCard(sideBySide: Bool) -> some View {
+        ExplainerCard(
+            sideBySide: sideBySide,
+            icon: "wand.and.sparkles",
+            title: "Or let it auto-learn",
+            message: """
+                Name an unknown speaker in a transcript and KVoice remembers that \
+                voice — the profile is created for you, and gets better with every \
+                recording. Enrolling just skips the first miss.
+                """,
+            actionTitle: nil,
+            action: nil,
+            secondaryTitle: nil,
+            secondaryAction: nil
+        )
+    }
+
+    // A `ScrollView` rather than a centred `VStack`, for two reasons that both
+    // showed up on a real window. It stops the cards being stretched to the
+    // window's full height — inside a fixed-height parent the `Spacer` that
+    // bottom-aligns each card's buttons has nothing to push against, so a
+    // 1200-point window produced 1200-point cards — and it means a window
+    // resized short scrolls this text instead of clipping it.
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                Image(systemName: "person.2.badge.gearshape")
+                    .font(.system(size: 46))
+                    .foregroundStyle(.tertiary)
+
+                VStack(spacing: 8) {
+                    Text("No people yet")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    Text(
+                        """
+                        Transcription hands back “Speaker A” and “Speaker B”. KVoice turns those \
+                        into names by comparing each voice against the profiles here — so until \
+                        someone is in this list, every speaker stays anonymous.
+                        """
+                    )
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+                }
+
+                cards
+            }
+            .padding(40)
+            .frame(maxWidth: .infinity)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 private struct ExplainerCard: View {
 
+    /// Whether this card is sharing a row with the other one.
+    let sideBySide: Bool
     let icon: String
     let title: String
     let message: String
@@ -459,20 +503,48 @@ private struct ExplainerCard: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Spacer(minLength: 0)
+            // Only when the cards are beside each other. Their paragraphs are
+            // different lengths, so a spacer and a floor height are what line
+            // the two button rows up and give the pair one silhouette. Stacked,
+            // the same two things just leave a card with a hole in it.
+            if sideBySide {
+                Spacer(minLength: 0)
+            }
 
             if let actionTitle, let action {
-                HStack(spacing: 8) {
-                    Button(actionTitle, action: action)
-                        .buttonStyle(.borderedProminent)
-                    if let secondaryTitle, let secondaryAction {
-                        Button(secondaryTitle, action: secondaryAction)
+                // Two buttons side by side need about 300 points, and a card in
+                // a narrow window gets rather less — at which point macOS
+                // truncates the titles to "Record a…" rather than wrapping.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        Button(actionTitle, action: action)
+                            .buttonStyle(.borderedProminent)
+                        if let secondaryTitle, let secondaryAction {
+                            Button(secondaryTitle, action: secondaryAction)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button(actionTitle, action: action)
+                            .buttonStyle(.borderedProminent)
+                        if let secondaryTitle, let secondaryAction {
+                            Button(secondaryTitle, action: secondaryAction)
+                        }
                     }
                 }
             }
         }
         .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 190, alignment: .leading)
+        // `idealWidth` is what makes the `ViewThatFits` above choose sensibly.
+        // Without it a card's ideal width is its longest paragraph set on one
+        // line — over a thousand points — so the side-by-side arrangement would
+        // never be judged to fit and the cards would always stack, however wide
+        // the window.
+        .frame(
+            idealWidth: 260,
+            maxWidth: .infinity,
+            minHeight: sideBySide ? 190 : nil,
+            alignment: .leading
+        )
         .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
     }
 }

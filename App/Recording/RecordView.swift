@@ -124,6 +124,9 @@ struct RecordView: View {
                     if session.isActive {
                         await session.stop()
                     } else {
+                        // Anything playing from the library is coming out of
+                        // the speakers and would be recorded back in.
+                        services.libraryPlayback.stop()
                         await session.start()
                     }
                 }
@@ -142,15 +145,70 @@ struct RecordView: View {
         }
     }
 
+    /// The input picker, directly under the transport.
+    ///
+    /// "Which microphone is this using?" is a question people ask *at* the
+    /// record button, a moment before they start talking — so the answer, and
+    /// the way to change it, belong here rather than only behind ⌘,. The
+    /// setting is the same one Settings writes (`SettingsStore.inputDeviceUID`,
+    /// stored by the device's stable UID), so the two screens cannot disagree.
     private var deviceRow: some View {
-        Label {
-            Text(session.deviceName ?? "No input device")
-        } icon: {
-            Image(systemName: session.deviceName == nil ? "mic.slash" : "mic")
+        Menu {
+            Picker("Input device", selection: inputSelection) {
+                Text("System default").tag(nil as String?)
+
+                ForEach(session.inputDevices) { device in
+                    Text(title(for: device)).tag(device.uid as String?)
+                }
+
+                // A chosen device that has been unplugged stays in the menu and
+                // stays selected: silently falling back to the built-in
+                // microphone is how a meeting gets recorded on the wrong input.
+                if let missing = session.missingDeviceUID {
+                    Text("Not connected — \(missing)").tag(missing as String?)
+                }
+            }
+            .pickerStyle(.inline)
+
+            Divider()
+
+            Button("Refresh Device List") {
+                Task { await session.refreshInputDevices() }
+            }
+        } label: {
+            Label {
+                Text(session.deviceName ?? "No input device")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } icon: {
+                Image(systemName: session.deviceName == nil ? "mic.slash" : "mic")
+            }
         }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(session.isActive)
         .font(.callout)
         .foregroundStyle(.secondary)
-        .help("Change the input device in Settings.")
+        .help(
+            session.isActive
+                ? "A recording keeps the device it started on. Stop it to switch inputs."
+                : "Choose which microphone the next recording uses."
+        )
+        .task { await session.refreshInputDevices() }
+    }
+
+    private var inputSelection: Binding<String?> {
+        Binding(
+            get: { services.recorder.selectedDeviceUID },
+            set: { services.recorder.selectInputDevice(uid: $0) }
+        )
+    }
+
+    private func title(for device: AudioInputDevice) -> String {
+        var text = device.name
+        if device.isDefault { text += " (system default)" }
+        if device.inputChannelCount > 1 { text += " — \(device.inputChannelCount) ch" }
+        return text
     }
 
     private var microphoneDeniedBanner: some View {
@@ -216,29 +274,55 @@ struct NoticeBanner<Accessory: View>: View {
         self.accessory = accessory
     }
 
+    /// Beside the text when there is room, underneath it when there is not.
+    ///
+    /// Every banner in the app carries a paragraph and one or two buttons, and
+    /// the narrowest column they appear in — the person detail next to the
+    /// people list — is around 300 points. Side by side at that width, the
+    /// paragraph is squeezed into a ten-character ribbon and the buttons
+    /// truncate to "Re…". Stacking is the layout that survives.
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon)
-                .foregroundStyle(tint)
-                .font(.title3)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 12) {
+                symbol
+                text
+                Spacer(minLength: 8)
+                accessory()
             }
-
-            Spacer(minLength: 8)
-
-            accessory()
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
+                    symbol
+                    text
+                    Spacer(minLength: 0)
+                }
+                accessory()
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var symbol: some View {
+        Image(systemName: icon)
+            .foregroundStyle(tint)
+            .font(.title3)
+    }
+
+    private var text: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        // Without a stated ideal, the paragraph's ideal width is the whole
+        // string on one line, `ViewThatFits` never judges the side-by-side
+        // arrangement to fit, and every banner stacks even in a wide window.
+        .frame(idealWidth: 300, alignment: .leading)
     }
 }
 

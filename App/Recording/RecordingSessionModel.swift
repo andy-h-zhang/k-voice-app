@@ -55,8 +55,34 @@ final class RecordingSessionModel {
     /// Normalized input level (0…1) for the meter.
     private(set) var level: Float = 0
 
-    /// Name of the input device being captured. Selection ships in Settings.
+    /// Name of the input device being captured.
     private(set) var deviceName: String?
+
+    /// Every connected input device, for the picker under the record button.
+    ///
+    /// Empty until ``refreshInputDevices()`` has answered — reading the list
+    /// means walking the CoreAudio HAL, which is the one thing this screen must
+    /// never do on the main thread (see ``refreshInputDevice()``).
+    private(set) var inputDevices: [AudioInputDevice] = []
+
+    /// Set when the device list could not be read at all.
+    private(set) var deviceListError: String?
+
+    /// UID of the chosen device, or nil when following the system default.
+    ///
+    /// Mirrored into observable storage rather than read straight from
+    /// `SettingsStore`: that is a `UserDefaults` wrapper and not `@Observable`,
+    /// so a menu bound through it would write the new device correctly and then
+    /// never redraw its own checkmark.
+    private(set) var selectedDeviceUID: String?
+
+    /// The chosen device's UID when it is no longer connected — kept in the
+    /// menu so unplugging an interface does not silently switch the next
+    /// recording to the built-in microphone without saying so.
+    var missingDeviceUID: String? {
+        guard let uid = selectedDeviceUID else { return nil }
+        return inputDevices.contains { $0.uid == uid } ? nil : uid
+    }
 
     /// A recoverable condition the user should know about (device changed,
     /// disk write failed) — the recording is paused but intact.
@@ -107,6 +133,7 @@ final class RecordingSessionModel {
         self.store = store
         self.library = library
         self.transcription = transcription
+        self.selectedDeviceUID = settings.inputDeviceUID
     }
 
     // MARK: - Environment
@@ -118,7 +145,54 @@ final class RecordingSessionModel {
     /// synchronous — it is a local TCC lookup. The device name is not.
     func refresh() {
         refreshPermission()
+        syncInputChoiceFromSettings()
+        Task {
+            await refreshInputDevice()
+            await refreshInputDevices()
+        }
+    }
+
+    /// Re-reads the connected input devices, off the main actor.
+    ///
+    /// Needs no microphone permission — only capturing does — so the menu is
+    /// populated even before the user has ever granted access.
+    func refreshInputDevices() async {
+        let result = await Task.detached(priority: .utility) { () -> Result<[AudioInputDevice], Error> in
+            do { return .success(try AudioDeviceManager.inputDevices()) } catch { return .failure(error) }
+        }.value
+
+        switch result {
+        case .success(let devices):
+            inputDevices = devices
+            deviceListError = nil
+        case .failure(let error):
+            inputDevices = []
+            deviceListError = Self.describe(error)
+        }
+    }
+
+    /// Chooses the input for the *next* recording (and for voice enrollment).
+    ///
+    /// Deliberately not applied to a recording already running: `MicSource`
+    /// binds its device when the engine starts, and swapping underneath it
+    /// would mean stopping and restarting capture — which is a second file, not
+    /// a settings change. The picker says so by being disabled while recording.
+    func selectInputDevice(uid: String?) {
+        settings.inputDeviceUID = uid
+        selectedDeviceUID = uid
+        onInputDeviceChanged?()
         Task { await refreshInputDevice() }
+    }
+
+    /// Called after this screen changes the input device, so the same control
+    /// in Settings — which may be open in its own window right now — agrees.
+    @ObservationIgnored
+    var onInputDeviceChanged: (() -> Void)?
+
+    /// Picks the setting up again after it was changed somewhere else — the
+    /// Settings window has the same control.
+    func syncInputChoiceFromSettings() {
+        selectedDeviceUID = settings.inputDeviceUID
     }
 
     private func refreshPermission() {
@@ -149,7 +223,7 @@ final class RecordingSessionModel {
     /// `Task.detached` rather than a plain `Task`: a plain one inherits the
     /// main actor and would put the HAL walk straight back where it came from.
     /// `AudioInputDevice` is `Sendable`, so only the finished name crosses back.
-    private func refreshInputDevice() async {
+    func refreshInputDevice() async {
         let uid = settings.inputDeviceUID
         let name = await Task.detached(priority: .utility) { () -> String? in
             do {

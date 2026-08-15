@@ -96,15 +96,36 @@ final class AppSettingsModel {
 
     /// Re-reads the connected input devices. Cheap, and needs no microphone
     /// permission — only capturing does.
-    func refreshInputDevices() {
-        do {
-            inputDevices = try AudioDeviceManager.inputDevices()
+    /// Off the main actor, because answering means walking the CoreAudio HAL —
+    /// several synchronous IPC round trips to `coreaudiod` per device, each
+    /// taking the HAL's global lock. Doing that on the main thread is what once
+    /// froze the whole window at the start of a recording; there is no reason
+    /// for Settings to repeat the mistake.
+    func refreshInputDevices() async {
+        let result = await Task.detached(priority: .utility) { () -> Result<[AudioInputDevice], Error> in
+            do { return .success(try AudioDeviceManager.inputDevices()) } catch { return .failure(error) }
+        }.value
+
+        switch result {
+        case .success(let devices):
+            inputDevices = devices
             deviceError = nil
-        } catch {
+        case .failure(let error):
             inputDevices = []
             deviceError = Self.describe(error)
         }
     }
+
+    /// Picks the setting up again after the record screen changed it.
+    func syncInputChoiceFromSettings() {
+        inputChoice = settings.inputDeviceUID.map { .device(uid: $0) } ?? .systemDefault
+    }
+
+    /// Called after Settings changes the input device, so the record screen's
+    /// own picker — which may be on screen in the main window right now —
+    /// agrees.
+    @ObservationIgnored
+    var onInputDeviceChanged: (() -> Void)?
 
     /// Selects an input. Takes effect on the next recording and the next
     /// enrollment, both of which read the UID when they start.
@@ -114,6 +135,7 @@ final class AppSettingsModel {
         case .device(let uid): settings.inputDeviceUID = uid
         }
         inputChoice = choice
+        onInputDeviceChanged?()
     }
 
     /// UID of the selected device, or nil when following the system default.

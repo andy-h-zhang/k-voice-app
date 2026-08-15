@@ -39,6 +39,13 @@ struct RecordingRowView: View {
         row.folderURL.appendingPathComponent(row.snapshot.audioFileName)
     }
 
+    private var playback: LibraryPlayback { services.libraryPlayback }
+
+    /// Whether this row is the one the library player has loaded.
+    private var isLoaded: Bool { playback.recordingID == row.id }
+
+    private var isPlayingThisRow: Bool { isLoaded && playback.isPlaying }
+
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -47,14 +54,20 @@ struct RecordingRowView: View {
                 if !row.participantNames.isEmpty {
                     participants
                 }
-                if status.kind == .recorded, !canTranscribe {
-                    Text("Add your AssemblyAI key in Settings to transcribe.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if isLoaded {
+                    transport
                 }
+                // No per-row "add your API key" line. The banner at the top of
+                // the list already says it once, and repeating it under every
+                // recording buried the thing each row is actually for — its
+                // title, date and length — under a sentence that is identical
+                // twenty times over. The disabled Transcribe button still
+                // carries the explanation in its tooltip.
             }
 
             Spacer(minLength: 12)
+
+            playButton
 
             audioDragHandle
 
@@ -73,6 +86,70 @@ struct RecordingRowView: View {
         // and a row that silently ignores a double-click reads as broken.
         .onTapGesture(count: 2) { onOpen(row) }
         .contextMenu { menu }
+    }
+
+    // MARK: - Playback
+
+    /// Play this recording without leaving the list.
+    ///
+    /// Every row has audio — that is the one thing a KVoice recording always
+    /// has, transcript or not — so this button is never disabled and never
+    /// depends on an API key. It is the first control in the trailing cluster
+    /// because "let me hear it again" is the most common reason to come back to
+    /// this list at all.
+    private var playButton: some View {
+        Button {
+            playback.toggle(id: row.id, url: audioURL)
+        } label: {
+            Image(systemName: isPlayingThisRow ? "pause.circle.fill" : "play.circle.fill")
+                .font(.title2)
+                .symbolRenderingMode(.hierarchical)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(isLoaded ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+        .help(isPlayingThisRow ? "Pause" : "Play this recording")
+        .accessibilityLabel(isPlayingThisRow ? "Pause" : "Play")
+    }
+
+    /// The scrubber, shown only on the row that is loaded.
+    ///
+    /// Inline rather than in a player bar at the bottom of the window: with one
+    /// recording playing at a time, the row *is* the player, and a separate bar
+    /// would leave the user matching a title in two places.
+    private var transport: some View {
+        HStack(spacing: 8) {
+            Text(Display.duration(playback.currentTime))
+                .monospacedDigit()
+
+            Slider(
+                value: Binding(
+                    get: { playback.currentTime },
+                    set: { services.libraryPlayback.scrub(to: $0) }
+                ),
+                in: 0...max(playback.duration, 0.01),
+                onEditingChanged: { editing in
+                    services.libraryPlayback.isScrubbing = editing
+                }
+            )
+            .controlSize(.mini)
+
+            Text(Display.duration(playback.duration))
+                .monospacedDigit()
+
+            Button {
+                services.libraryPlayback.stop()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .buttonStyle(.borderless)
+            .help("Close the player")
+            .accessibilityLabel("Stop playback")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: 420)
+        .padding(.top, 2)
     }
 
     /// The always-visible way to find this recording on disk.
@@ -153,6 +230,9 @@ struct RecordingRowView: View {
                 .font(.headline)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                // The row is dense enough that a long title is always
+                // truncated; hovering should still answer which one this is.
+                .help(row.title)
         }
     }
 
@@ -218,6 +298,10 @@ struct RecordingRowView: View {
         // key needs to reach.
         Button(hasTranscript ? "Open Transcript" : "Open Recording") { onOpen(row) }
 
+        Button(isPlayingThisRow ? "Pause" : "Play") {
+            playback.toggle(id: row.id, url: audioURL)
+        }
+
         Button("Rename…") { beginRename() }
 
         if status.kind == .recorded {
@@ -272,6 +356,9 @@ struct RecordingRowView: View {
         guard isEditing else { return }
         let newTitle = draftTitle
         editingID = nil
+        // A rename moves the folder and the `.m4a` inside it, so an open player
+        // would be holding a path that no longer exists.
+        services.libraryPlayback.stopIfPlaying(id: row.id)
         services.library.rename(id: row.id, to: newTitle)
     }
 

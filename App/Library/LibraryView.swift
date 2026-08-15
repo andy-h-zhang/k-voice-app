@@ -87,6 +87,7 @@ struct LibraryView: View {
             Button("Move to Trash", role: .destructive) {
                 services.transcription.stopObserving(row.id)
                 services.jobStatus.forget(row.id)
+                services.libraryPlayback.stopIfPlaying(id: row.id)
                 services.library.moveToTrash(id: row.id)
             }
             Button("Cancel", role: .cancel) {}
@@ -104,6 +105,28 @@ struct LibraryView: View {
             Button("OK", role: .cancel) {}
         } message: { message in
             Text(message)
+        }
+        .alert(
+            "Playback problem",
+            isPresented: Binding(
+                get: { services.libraryPlayback.errorMessage != nil },
+                set: { if !$0 { services.libraryPlayback.errorMessage = nil } }
+            ),
+            presenting: services.libraryPlayback.errorMessage
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
+        }
+        // Opening a recording hands playback to the editor, which has its own
+        // player and its own transport.
+        //
+        // Deliberately keyed on that, not on `onDisappear`. This view appears
+        // and disappears several times while a `NavigationStack` settles, so
+        // stopping there stopped playback a fraction of a second after the play
+        // button was pressed — audible as a click and nothing else.
+        .onChange(of: openRecordingID) { _, opened in
+            if opened != nil { services.libraryPlayback.stop() }
         }
     }
 
