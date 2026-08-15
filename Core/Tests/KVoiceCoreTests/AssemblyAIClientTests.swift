@@ -65,7 +65,7 @@ struct AssemblyAIClientTests {
         let request = try #require(captured.all.first)
         #expect(request.httpMethod == "POST")
         #expect(request.url?.path == "/v2/upload")
-        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "test-key")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/octet-stream")
     }
 
@@ -110,7 +110,7 @@ struct AssemblyAIClientTests {
         #expect(request.httpMethod == "POST")
         #expect(request.url?.path == "/v2/transcript")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
-        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "test-key")
 
         let body = try #require(captured.bodies.first)
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])

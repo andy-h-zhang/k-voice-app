@@ -31,9 +31,24 @@ public enum AssemblyAIConstants {
     public static let authorizationHeader = "Authorization"
     public static let contentTypeHeader = "Content-Type"
 
-    /// api-notes §Auth: Bearer auth on *every* request.
+    /// The **raw key**, with no `Bearer ` prefix.
+    ///
+    /// AssemblyAI is one of the APIs that does not use a scheme here. Its docs
+    /// say so twice over: the pre-recorded guide shows
+    /// `-H "authorization: $ASSEMBLYAI_API_KEY"` and states "no `Bearer`
+    /// prefix", and its OpenAPI spec declares the scheme as
+    /// `type: apiKey, in: header, name: Authorization` — which by definition
+    /// carries no prefix, where a bearer token would be `type: http,
+    /// scheme: bearer`.
+    ///
+    /// This shipped as `"Bearer \(apiKey)"` and was wrong from the first
+    /// commit, which nothing caught because the value was only ever asserted
+    /// against itself in tests and no real key had been used against the live
+    /// API. The server reads `Bearer sk_…` as the entire key and answers
+    /// `401 Invalid API key`, so transcription failed for every user with a
+    /// perfectly good key.
     public static func authorizationValue(apiKey: String) -> String {
-        "Bearer \(apiKey)"
+        apiKey
     }
 
     /// api-notes §1: the upload endpoint takes raw binary — not multipart.

@@ -369,6 +369,85 @@ final class RecordingSessionModel {
         }
     }
 
+    // MARK: - Importing
+
+    /// True while ``importAudio(from:)`` is copying and probing files.
+    private(set) var isImporting = false
+
+    /// Brings existing audio files into the library as recordings.
+    ///
+    /// The result is a recording in every sense the rest of the app cares
+    /// about: its own folder, a row in the library, a duration read from the
+    /// file itself, and — exactly as after `stop()` — a transcription enqueued
+    /// when a key is configured. Nothing downstream can tell it was imported.
+    ///
+    /// The file keeps its own format. A `.wav` stays a `.wav`: transcoding to
+    /// the recorder's AAC would cost quality for nothing, since playback,
+    /// speaker embedding and upload all read whatever `AVFoundation` opens.
+    ///
+    /// - Returns: The id of the last recording created, so the caller can offer
+    ///   to open it.
+    @discardableResult
+    func importAudio(from urls: [URL]) async -> UUID? {
+        guard !urls.isEmpty, !isImporting else { return nil }
+
+        isImporting = true
+        defer { isImporting = false }
+
+        errorMessage = nil
+        lastSaved = nil
+
+        var lastID: UUID?
+        var failures: [String] = []
+        var imported = 0
+
+        for url in urls {
+            // The picker hands back a security-scoped URL. This app is not
+            // sandboxed, so the copy would succeed regardless — but the scope
+            // is free to honour and keeps the code correct if it ever is.
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+            do {
+                let title = url.deletingPathExtension().lastPathComponent
+                let folder = try store.importRecording(from: url, title: title)
+                let duration = (try? AudioSpanExtractor().duration(of: folder.audioURL)) ?? 0
+
+                let id = try library.insert(
+                    folder: folder,
+                    duration: duration,
+                    // The file's own date, not now: an imported meeting belongs
+                    // where it happened in a list sorted newest-first, the same
+                    // way a recorded one does.
+                    createdAt: Self.creationDate(of: url) ?? Date()
+                )
+                _ = transcription.enqueue(id)
+                lastID = id
+                imported += 1
+            } catch {
+                failures.append("\(url.lastPathComponent): \(Self.describe(error))")
+            }
+        }
+
+        if !failures.isEmpty {
+            errorMessage = imported == 0
+                ? "Nothing could be imported.\n\n" + failures.joined(separator: "\n")
+                : """
+                    Imported \(imported) of \(urls.count) files. These could not be read:
+
+                    \(failures.joined(separator: "\n"))
+                    """
+        }
+
+        return lastID
+    }
+
+    /// When the source file was made, falling back to when it was last changed.
+    private static func creationDate(of url: URL) -> Date? {
+        let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+        return values?.creationDate ?? values?.contentModificationDate
+    }
+
     /// Stops for an app quit — the file must be finalized or the `.m4a` has no
     /// `moov` atom and will not play.
     func stopForQuit() async {

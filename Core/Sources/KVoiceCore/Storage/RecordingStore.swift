@@ -166,6 +166,58 @@ public struct RecordingStore: Sendable {
         title: String,
         format: RecordingFormat = .aacMono48k
     ) throws -> RecordingFolder {
+        try createRecording(title: title, audioFileExtension: format.fileExtension)
+    }
+
+    /// Copies an existing audio file into the library as a new recording.
+    ///
+    /// The point of this is that an imported file becomes indistinguishable
+    /// from a recorded one: same folder-per-recording shape, same base name
+    /// shared by the audio and everything later rendered from it, so rename,
+    /// export, Finder reveal and Trash all work on it without a special case.
+    ///
+    /// Copies rather than moves. The source is a file the user chose from
+    /// somewhere else on their disk, and a picker that silently *removed* it
+    /// from their Downloads folder would be a nasty surprise.
+    ///
+    /// - Throws: ``StorageError/fileNotFound(path:)`` if the source is gone, or
+    ///   ``StorageError/folderCreationFailed(path:reason:)`` if the copy fails —
+    ///   in which case the half-made folder is cleaned up rather than left as
+    ///   an empty recording in the library.
+    public func importRecording(from sourceURL: URL, title: String) throws -> RecordingFolder {
+        guard operations.fileExists(at: sourceURL) else {
+            throw StorageError.fileNotFound(path: sourceURL.path)
+        }
+
+        let folder = try createRecording(
+            title: title,
+            audioFileExtension: sourceURL.pathExtension
+        )
+
+        do {
+            try operations.copyItem(at: sourceURL, to: folder.audioURL)
+        } catch {
+            try? FileManager.default.removeItem(at: folder.folderURL)
+            throw StorageError.folderCreationFailed(
+                path: folder.audioURL.path,
+                reason: error.localizedDescription
+            )
+        }
+
+        return folder
+    }
+
+    /// The same, for audio whose container the recorder did not choose.
+    ///
+    /// An imported file keeps its own extension — and therefore its own bytes.
+    /// Transcoding a `.wav` to the recorder's AAC would lose quality to no
+    /// purpose: everything downstream reads whatever `AVFoundation` can open,
+    /// `Recording.folder(inRoot:)` derives the extension from the stored file
+    /// name rather than assuming `m4a`, and AssemblyAI accepts the lot.
+    public func createRecording(
+        title: String,
+        audioFileExtension: String
+    ) throws -> RecordingFolder {
         try createRootIfNeeded()
 
         let sanitized = FilenameSanitizer.sanitize(title)
@@ -186,7 +238,7 @@ public struct RecordingStore: Sendable {
         return RecordingFolder(
             folderURL: folderURL,
             baseName: uniqueName,
-            audioFileExtension: format.fileExtension
+            audioFileExtension: audioFileExtension.isEmpty ? "m4a" : audioFileExtension.lowercased()
         )
     }
 

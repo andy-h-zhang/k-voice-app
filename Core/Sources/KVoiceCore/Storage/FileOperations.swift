@@ -11,6 +11,7 @@ public protocol FileOperations: Sendable {
     func isDirectory(at url: URL) -> Bool
     func createDirectory(at url: URL) throws
     func moveItem(at source: URL, to destination: URL) throws
+    func copyItem(at source: URL, to destination: URL) throws
     /// Directory contents, excluding hidden files (`.DS_Store` and friends
     /// are never part of a recording).
     func contentsOfDirectory(at url: URL) throws -> [URL]
@@ -36,6 +37,10 @@ public struct SystemFileOperations: FileOperations {
 
     public func moveItem(at source: URL, to destination: URL) throws {
         try FileManager.default.moveItem(at: source, to: destination)
+    }
+
+    public func copyItem(at source: URL, to destination: URL) throws {
+        try FileManager.default.copyItem(at: source, to: destination)
     }
 
     public func contentsOfDirectory(at url: URL) throws -> [URL] {

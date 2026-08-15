@@ -310,6 +310,7 @@ private final class MoveFailingOperations: FileOperations, @unchecked Sendable {
     func isDirectory(at url: URL) -> Bool { system.isDirectory(at: url) }
     func createDirectory(at url: URL) throws { try system.createDirectory(at: url) }
     func contentsOfDirectory(at url: URL) throws -> [URL] { try system.contentsOfDirectory(at: url) }
+    func copyItem(at source: URL, to destination: URL) throws { try system.copyItem(at: source, to: destination) }
 
     func moveItem(at source: URL, to destination: URL) throws {
         let index: Int = lock.withLock {

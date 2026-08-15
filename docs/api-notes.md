@@ -4,7 +4,8 @@ Fulfils the Phase-1 task "re-verify the AssemblyAI request surface." Verified ag
 
 ## Auth
 
-- Header: `Authorization: Bearer <API_KEY>` on every request.
+- Header: `Authorization: <API_KEY>` on every request — the **raw key, with no `Bearer` prefix**.
+  - **Corrected 2026-08-15.** This file previously said `Authorization: Bearer <API_KEY>`, and the code followed it. That is wrong, and it made every transcription fail with `401 Invalid API key` against a valid key. Sources: the [pre-recorded guide](https://www.assemblyai.com/docs/speech-to-text/pre-recorded-audio) shows `-H "authorization: $ASSEMBLYAI_API_KEY"` and says "no `Bearer` prefix"; the OpenAPI spec declares `type: apiKey, in: header, name: Authorization`, which carries no scheme (a bearer token would be `type: http, scheme: bearer`).
 - Base URL `https://api.assemblyai.com` (EU region exists: `api.eu.assemblyai.com` — not used by us).
 - The transcribe call must use an API key from the **same project** as the upload call, else 403 "Cannot access uploaded file."
 

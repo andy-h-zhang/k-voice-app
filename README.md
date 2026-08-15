@@ -19,6 +19,64 @@ make install    # builds a Release .app and installs it to /Applications
 make clean      # removes .build/, the generated project, and build/
 ```
 
+Before `make release` or `make install`, bump the build number by hand — see
+[Versioning](#versioning--bump-this-by-hand-before-every-release) below.
+
+## Versioning — bump this by hand before every release
+
+Nothing bumps the version for you. Do it yourself, in `project.yml`, **before**
+running `make release` or `make install`:
+
+```yaml
+# project.yml — under targets ▸ KVoice ▸ settings ▸ base
+targets:
+  KVoice:
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "0.1.0"        # ← the version users see
+        CURRENT_PROJECT_VERSION: "1"      # ← the build number
+```
+
+Both keys are target build settings, so they belong in that nested `base:` block
+— not in a top-level `settings:` of their own.
+
+| Edit | Becomes | Rule |
+|---|---|---|
+| `MARKETING_VERSION` | `CFBundleShortVersionString` | The human version (`0.2.0`). Bump when you ship something worth naming. |
+| `CURRENT_PROJECT_VERSION` | `CFBundleVersion` | A plain incrementing integer. **Bump on every build you hand to anyone**, even a rebuild of the same `MARKETING_VERSION`. |
+
+There is no `Info.plist` to edit — `GENERATE_INFOPLIST_FILE: YES` means Xcode
+synthesizes one from those two settings — and `KVoice.xcodeproj` is generated
+and gitignored, so `project.yml` is the only file that changes. `make release`
+and `make install` both run `make generate` first, so the edit is picked up with
+no extra step.
+
+**Why the build number matters more than it looks.** `CFBundleVersion` is what
+macOS compares to decide whether one copy of an app is newer than another —
+Gatekeeper's caches, Launch Services, and any future Sparkle or notarization
+flow all key off it. Shipping two different builds that both say `1` means the
+system cannot tell them apart, which shows up later as an old copy that refuses
+to be replaced.
+
+Verify the bump took: the banner at the end of `make release` reads the values
+back out of the *built* `Info.plist`, not out of `project.yml`, so it is a real
+check rather than an echo of what you typed:
+
+```
+ KVoice 0.2.0 (2) — Release, signed: ad-hoc
+```
+
+A running copy shows nothing — there is no About window yet — so Finder's Get
+Info on `/Applications/KVoice.app` is how you check an installed build.
+
+### The one version that is *not* part of this
+
+`KVoiceCore.version` in [Core/Sources/KVoiceCore/KVoiceCore.swift](Core/Sources/KVoiceCore/KVoiceCore.swift)
+is the Core package's own API version, surfaced only by `speakerlab --version`.
+It is deliberately independent of the app bundle: bump it when the Core API
+changes meaningfully, not on every app release.
+
 ## Release builds
 
 `make release` runs `make test` first — a release never ships untested — then
@@ -105,7 +163,7 @@ First real-model use downloads FluidAudio's CoreML models (~100 MB, cached in `~
 
 ## Status
 
-Phases 0–7 of [docs/implementation-plan.md](docs/implementation-plan.md) are complete and merged: recording, transcription, speaker ID with auto-learn, persistence, the full app (record / library / editor / people / settings), exports, and the CLI harness. **570 offline tests in 60 suites** (`make test`), zero warnings from our own code in `make build`, `make app-build`, and `make release`.
+Phases 0–7 of [docs/implementation-plan.md](docs/implementation-plan.md) are complete and merged: recording, transcription, speaker ID with auto-learn, persistence, the full app (record / library / editor / people / settings), exports, and the CLI harness. **603 offline tests in 64 suites** (`make test`), zero warnings from our own code in `make build`, `make app-build`, and `make release`.
 
 What is left is the part that needs a person, not a test:
 

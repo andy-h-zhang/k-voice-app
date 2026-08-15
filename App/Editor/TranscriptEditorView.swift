@@ -288,19 +288,32 @@ struct TranscriptEditorView: View {
     /// somewhere else and do something the app could do here.
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("No Transcript Yet", systemImage: "text.bubble")
+            Label(
+                failureMessage == nil ? "No Transcript Yet" : "Transcription Failed",
+                systemImage: failureMessage == nil ? "text.bubble" : "exclamationmark.triangle.fill"
+            )
         } description: {
-            Text(emptyStateDescription)
+            // Selectable, because a failure message is the thing a user needs to
+            // paste into a search box or a bug report, and an API error names
+            // the exact status code that makes the difference.
+            Text(failureMessage ?? emptyStateDescription)
+                .textSelection(.enabled)
         } actions: {
             if isTranscribing {
                 ProgressView().controlSize(.small)
-            } else if services.hasAPIKey {
+            } else if !services.hasAPIKey {
+                Button("Open Settings…") { services.navigation.select(.settings) }
+                    .buttonStyle(.borderedProminent)
+            } else if failureMessage != nil {
+                HStack(spacing: 8) {
+                    Button("Try Again") { services.transcription.retry(model.recordingID) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Open Settings…") { services.navigation.select(.settings) }
+                }
+            } else {
                 Button("Transcribe") { services.transcription.enqueue(model.recordingID) }
                     .buttonStyle(.borderedProminent)
                     .help("Upload this recording and identify its speakers.")
-            } else {
-                Button("Open Settings…") { services.navigation.select(.settings) }
-                    .buttonStyle(.borderedProminent)
             }
         }
         .frame(maxHeight: .infinity)
@@ -308,6 +321,28 @@ struct TranscriptEditorView: View {
 
     private var isTranscribing: Bool {
         services.jobStatus.running.contains(model.recordingID)
+    }
+
+    /// The persisted status of this recording, preferring a live job's view of
+    /// it over the row that was read when the library last reloaded.
+    private var recordingStatus: RecordingStatus {
+        services.jobStatus.status(
+            for: model.recordingID,
+            fallback: services.library.row(id: model.recordingID)?.snapshot.status ?? .recorded
+        )
+    }
+
+    /// Why the last attempt failed, or nil if none has.
+    ///
+    /// This screen used to ignore it entirely: a transcription could fail with a
+    /// precise, actionable message — "AssemblyAI rejected the API key (401)" —
+    /// and the editor would drop straight back to "No Transcript Yet" as though
+    /// the button had never been pressed. The message was persisted on the row
+    /// and shown only in the sidebar glyph's tooltip, which is not a place
+    /// anyone looks after clicking Transcribe.
+    private var failureMessage: String? {
+        guard !isTranscribing else { return nil }
+        return recordingStatus.failureMessage
     }
 
     private var emptyStateDescription: String {

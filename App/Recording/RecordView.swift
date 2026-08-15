@@ -1,5 +1,6 @@
 import KVoiceCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The record scene: one prominent control, an honest clock, and a level meter.
 ///
@@ -13,6 +14,8 @@ struct RecordView: View {
 
     private var session: RecordingSessionModel { services.recorder }
 
+    @State private var isChoosingFiles = false
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
@@ -21,7 +24,10 @@ struct RecordView: View {
                 clock
                 meter
                 transport
-                deviceRow
+                VStack(spacing: 14) {
+                    deviceRow
+                    uploadButton
+                }
             }
             .frame(maxWidth: 420)
 
@@ -194,6 +200,53 @@ struct RecordView: View {
                 : "Choose which microphone the next recording uses."
         )
         .task { await session.refreshInputDevices() }
+    }
+
+    /// Bring audio in that was recorded somewhere else.
+    ///
+    /// Under the transport rather than in a menu, because "I already have the
+    /// file" is a first-class way to start: a call recorded in Zoom, a voice
+    /// memo from a phone, an interview someone sent you. What comes out the
+    /// other side is a recording like any other — same folder, same library
+    /// row, same automatic transcription.
+    private var uploadButton: some View {
+        Button {
+            isChoosingFiles = true
+        } label: {
+            if session.isImporting {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Importing…")
+                }
+                .frame(minWidth: 96)
+            } else {
+                Label("Upload", systemImage: "square.and.arrow.down")
+                    .frame(minWidth: 96)
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(session.isActive || session.isImporting)
+        .help(
+            session.isActive
+                ? "Finish the current recording first."
+                : "Add audio files you already have — they land in your library like a recording."
+        )
+        .fileImporter(
+            isPresented: $isChoosingFiles,
+            allowedContentTypes: [.audio],
+            allowsMultipleSelection: true
+        ) { result in
+            guard case .success(let urls) = result, !urls.isEmpty else { return }
+            Task {
+                if let id = await session.importAudio(from: urls) {
+                    // One file: go straight to it, which is where the user was
+                    // heading anyway. Several: stay put, because jumping to an
+                    // arbitrary one of them would hide the rest.
+                    if urls.count == 1 { services.navigation.openRecording(id) }
+                }
+            }
+        }
     }
 
     private var inputSelection: Binding<String?> {
