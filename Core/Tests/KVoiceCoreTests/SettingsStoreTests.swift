@@ -403,6 +403,46 @@ struct KeychainAPIKeyStoreTests {
         #expect(query.count == 3)
     }
 
+    @Test("a write carries the value and the ACL that keeps reads silent")
+    func addQueryShape() throws {
+        let access = try #require(
+            KeychainAPIKeyStore.selfTrustingAccess(descriptor: "test"),
+            "SecAccessCreate should succeed even from an unsigned test binary"
+        )
+        let query = KeychainAPIKeyStore.addQuery(
+            service: "svc",
+            account: "acct",
+            data: Data("secret".utf8),
+            access: access
+        )
+
+        // Still addresses the same item as every read.
+        #expect(query[kSecAttrService as String] as? String == "svc")
+        #expect(query[kSecAttrAccount as String] as? String == "acct")
+        #expect(query[kSecValueData as String] as? Data == Data("secret".utf8))
+
+        // The ACL is the whole point: without it the item trusts nobody and
+        // every read raises the password dialog.
+        #expect(query[kSecAttrAccess as String] != nil)
+        // `kSecAttrAccessible` alongside `kSecAttrAccess` is `errSecParam`.
+        #expect(query[kSecAttrAccessible as String] == nil)
+    }
+
+    @Test("a write without an ACL still stores the key")
+    func addQueryWithoutAccess() {
+        // SecAccessCreate failing must degrade to prompting, not to losing the
+        // user's key.
+        let query = KeychainAPIKeyStore.addQuery(
+            service: "svc",
+            account: "acct",
+            data: Data("secret".utf8),
+            access: nil
+        )
+
+        #expect(query[kSecValueData as String] as? Data == Data("secret".utf8))
+        #expect(query[kSecAttrAccess as String] == nil)
+    }
+
     @Test("the defaults are the documented service and account")
     func defaults() {
         let store = KeychainAPIKeyStore()

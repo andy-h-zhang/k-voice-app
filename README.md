@@ -146,6 +146,19 @@ export ASSEMBLYAI_API_KEY="paste-your-key-here"
 
 The app will store the key in the macOS Keychain via its Settings screen (the CLI also falls back to that Keychain entry when the env var is unset). Everything except live transcription — builds, tests, recording, exports, speaker matching against saved transcripts — works without a key.
 
+### Why the Keychain sometimes asks for your password
+
+Saving the key writes a login-keychain item whose ACL trusts exactly one application: the KVoice binary that wrote it. Reads from that binary satisfy the ACL silently, so the normal experience is *paste the key once, never see a dialog again*.
+
+The ACL identifies the app by its code signature, and an **ad-hoc** signature — what `make release` produces when no Developer ID is in the keychain — has no stable identity: its designated requirement is the binary's `cdhash`, which changes on every rebuild. So after a `make install` of a new build, the app is a stranger to the item it wrote and the "KVoice wants to use your confidential information" dialog returns.
+
+Two ways out, in order of effort:
+
+- **Re-save the key in Settings after installing a new build.** The save deletes and re-adds the item, minting a fresh ACL for the new binary. One dialog on the delete, then silence again.
+- **Sign with a Developer ID** (see "Release builds"). A stable identity survives rebuilds, and it is also the prerequisite for moving to the data-protection keychain, where entitlements gate access and there is no ACL and no dialog at all.
+
+Within a single launch the key is read once and held in memory (`CachingAPIKeyStore`), so an unsatisfied ACL costs one dialog per launch rather than one per transcription.
+
 ## speakerlab (validation CLI)
 
 The speaker-ID pipeline ships with a CLI harness used to validate matching before/alongside the app:

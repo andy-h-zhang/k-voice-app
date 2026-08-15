@@ -65,7 +65,12 @@ final class AppServices {
 
     init(
         settings: SettingsStore = SettingsStore(),
-        keychain: any APIKeyStore = KeychainAPIKeyStore()
+        // Wrapped in a cache, because every Keychain read is an authorization
+        // check and an unsatisfied one is a password dialog. Without this the
+        // app re-reads on every `enqueue` and every `canTranscribe`, so a user
+        // whose build the item's ACL does not trust was prompted once per click
+        // of Transcribe rather than once per launch.
+        keychain: any APIKeyStore = CachingAPIKeyStore(KeychainAPIKeyStore())
     ) throws {
         self.settings = settings
         self.keychain = keychain
