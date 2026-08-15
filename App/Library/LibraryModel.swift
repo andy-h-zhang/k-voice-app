@@ -41,8 +41,10 @@ final class LibraryModel {
     /// Surfaced to the user as an alert; set by a failed rename or delete.
     var errorMessage: String?
 
-    /// Selected row. Phase 5's transcript editor is the detail view for this.
-    var selection: UUID?
+    // No `selection` here. Which recording is on screen is a fact about the
+    // *window* — and one the tab bar can also change — so it lives in
+    // ``NavigationModel`` alongside the tabs it is mutually exclusive with. A
+    // copy here would be a second source of truth for the same question.
 
     private let container: ModelContainer
     private let store: RecordingStore
@@ -112,7 +114,9 @@ final class LibraryModel {
 
         let id = recording.id
         reload()
-        selection = id
+        // Deliberately does not select the new row: finishing a recording leaves
+        // you on the record screen, ready to start another, and the "Saved …"
+        // banner is what offers to open it.
         return id
     }
 
@@ -178,7 +182,6 @@ final class LibraryModel {
             context.delete(recording)
             try context.save()
 
-            if selection == id { selection = nil }
             reload()
         } catch {
             errorMessage = "Could not move the recording to the Trash: \(Self.describe(error))"

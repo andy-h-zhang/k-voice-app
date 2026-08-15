@@ -39,20 +39,20 @@ import SwiftData
 public actor TranscriptionJob {
 
     /// Knobs that are not settings and not identifiers.
+    ///
+    /// The speech-model list used to live here. It moved to `SettingsSnapshot`
+    /// when it became a user setting, so that — like the keyterms beside it —
+    /// the value in force at submit time is the one that governs the request.
     public struct Configuration: Sendable {
-        /// Priority-ordered model list sent as `speech_models`.
-        public var speechModels: [String]
         /// File name for the verbatim response inside the recording folder.
         public var rawTranscriptFileName: String
         /// Polling schedule. Tests inject one that never actually sleeps.
         public var poller: TranscriptPoller
 
         public init(
-            speechModels: [String] = AssemblyAIConstants.defaultSpeechModels,
             rawTranscriptFileName: String = RawTranscriptStore.defaultFileName,
             poller: TranscriptPoller = TranscriptPoller()
         ) {
-            self.speechModels = speechModels
             self.rawTranscriptFileName = rawTranscriptFileName
             self.poller = poller
         }
@@ -348,12 +348,13 @@ public actor TranscriptionJob {
         // Keyterms are read from the settings snapshot **here**, at submit
         // time, and sanitized against the API's limits for the models we are
         // actually asking for (api-notes §2).
-        let budget = TranscriptRequest.keytermWordBudget(for: configuration.speechModels)
+        let speechModels = settings.speechModelPreference.speechModels
+        let budget = TranscriptRequest.keytermWordBudget(for: speechModels)
         let keyterms = TranscriptRequest.sanitizedKeyterms(settings.keyterms, wordBudget: budget)
 
         let request = TranscriptRequest(
             audioURL: uploadURL,
-            speechModels: configuration.speechModels,
+            speechModels: speechModels,
             speakerLabels: true,
             keytermsPrompt: keyterms.isEmpty ? nil : keyterms
         )

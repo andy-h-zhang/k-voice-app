@@ -51,6 +51,7 @@ final class AppSettingsModel {
     private(set) var defaultExportFormat: ExportFormat
     private(set) var inputChoice: InputChoice
     private(set) var libraryRoot: URL
+    private(set) var speechModelPreference: SpeechModelPreference
 
     // MARK: - Keyterms
 
@@ -90,6 +91,19 @@ final class AppSettingsModel {
         self.defaultExportFormat = settings.defaultExportFormat
         self.inputChoice = settings.inputDeviceUID.map { .device(uid: $0) } ?? .systemDefault
         self.libraryRoot = settings.storageFolderURL
+        self.speechModelPreference = settings.speechModelPreference
+    }
+
+    // MARK: - Speech model
+
+    /// Changes which model the *next* transcription asks for.
+    ///
+    /// Never retroactive: a job takes its settings snapshot when it is
+    /// submitted, so anything already running finishes on the model it started
+    /// with — and the recording row records which one actually served it.
+    func setSpeechModelPreference(_ preference: SpeechModelPreference) {
+        settings.speechModelPreference = preference
+        speechModelPreference = preference
     }
 
     // MARK: - Devices
@@ -218,7 +232,11 @@ final class AppSettingsModel {
 
     /// What AssemblyAI will actually accept from the current draft.
     var keytermReport: KeytermReport {
-        KeytermReport(text: keytermsText)
+        // The budget follows the chosen model. Naming a fallback drops it from
+        // ~1,000 words to 200, and the count under the editor has to say so as
+        // it happens rather than let the user type 400 words that will be
+        // silently discarded at submit time.
+        KeytermReport(text: keytermsText, wordBudget: speechModelPreference.keytermWordBudget)
     }
 
     /// Persists the draft. Called as it is edited: a job takes a settings
@@ -319,12 +337,10 @@ final class AppSettingsModel {
 /// 41 is past the budget".
 struct KeytermReport {
 
-    /// Total word budget. Taken from the models actually sent, which include
-    /// `universal-2` as a fallback — and its budget is the lower of the two, so
-    /// it is the one that binds.
-    static let wordBudget = TranscriptRequest.keytermWordBudget(
-        for: AssemblyAIConstants.defaultSpeechModels
-    )
+    /// Total word budget, from the models actually being sent. When more than
+    /// one model is named the lowest budget among them binds, because any of
+    /// them may serve the request.
+    let wordBudget: Int
 
     /// Non-empty lines, trimmed — what the user thinks they typed.
     let entered: [String]
@@ -339,7 +355,8 @@ struct KeytermReport {
     /// Words the accepted terms consume.
     let wordsUsed: Int
 
-    init(text: String) {
+    init(text: String, wordBudget: Int) {
+        self.wordBudget = wordBudget
         let lines = Self.lines(in: text)
         entered = lines
 
@@ -357,7 +374,7 @@ struct KeytermReport {
         }
         duplicateCount = duplicates
 
-        let kept = TranscriptRequest.sanitizedKeyterms(lines, wordBudget: Self.wordBudget)
+        let kept = TranscriptRequest.sanitizedKeyterms(lines, wordBudget: wordBudget)
         accepted = kept
         overBudgetCount = max(0, eligible.count - kept.count)
         wordsUsed = kept.reduce(0) { $0 + $1.split(whereSeparator: \.isWhitespace).count }
@@ -374,7 +391,7 @@ struct KeytermReport {
         !tooLong.isEmpty || duplicateCount > 0 || overBudgetCount > 0
     }
 
-    var isOverBudget: Bool { wordsUsed >= Self.wordBudget }
+    var isOverBudget: Bool { wordsUsed >= wordBudget }
 
     /// One line summarizing every drop, or nil when nothing was dropped.
     var problemSummary: String? {
@@ -392,7 +409,7 @@ struct KeytermReport {
             parts.append("\(duplicateCount) repeated")
         }
         if overBudgetCount > 0 {
-            parts.append("\(overBudgetCount) past the \(Self.wordBudget)-word budget")
+            parts.append("\(overBudgetCount) past the \(wordBudget)-word budget")
         }
         return "Ignored: " + parts.joined(separator: ", ") + "."
     }

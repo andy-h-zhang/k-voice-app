@@ -19,11 +19,25 @@ struct TranscriptRequestTests {
         #expect(json.keys.sorted() == ["audio_url", "keyterms_prompt", "speaker_labels", "speech_models"])
     }
 
-    @Test("defaults to the pinned model priority list with diarization on")
+    /// One model, no fallback. `universal-2` used to be named behind
+    /// `universal-3-5-pro`, which capped every request's keyterms at the lower
+    /// model's 200-word budget whether or not the fallback was ever used — see
+    /// ``SpeechModelPreference``. The fallback is still available, but as a
+    /// choice the user makes rather than the default nobody sees.
+    @Test("defaults to 3.5 Pro alone, with diarization on")
     func defaults() throws {
         let json = try encodedJSON(TranscriptRequest(audioURL: "https://cdn/1"))
-        #expect(json["speech_models"] as? [String] == ["universal-3-5-pro", "universal-2"])
+        #expect(json["speech_models"] as? [String] == ["universal-3-5-pro"])
         #expect(json["speaker_labels"] as? Bool == true)
+    }
+
+    /// Still sent explicitly rather than omitted: the server has its own
+    /// default and it is not ours to inherit silently (api-notes §2).
+    @Test("the model list is always present in the body")
+    func modelsAlwaysSent() throws {
+        let json = try encodedJSON(TranscriptRequest(audioURL: "https://cdn/1"))
+        let models = try #require(json["speech_models"] as? [String])
+        #expect(!models.isEmpty)
     }
 
     /// api-notes §2: an absent field is not the same as an empty array.

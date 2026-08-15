@@ -43,9 +43,14 @@ public enum AssemblyAIConstants {
     // MARK: - Models
 
     /// `speech_models` is a **priority-ordered array**, not a scalar
-    /// (api-notes §2). This value equals the current server default; we send
-    /// it explicitly to pin behavior across server-side default changes.
-    public static let defaultSpeechModels = ["universal-3-5-pro", "universal-2"]
+    /// (api-notes §2). Sent explicitly to pin behavior across server-side
+    /// default changes.
+    ///
+    /// One model, no fallback. `universal-2` used to be listed behind
+    /// `universal-3-5-pro` as insurance, which cost every request four fifths of
+    /// its keyterm budget — see ``SpeechModelPreference`` for the arithmetic.
+    /// Users who want the fallback can choose it in Settings.
+    public static let defaultSpeechModels = SpeechModelPreference.default.speechModels
 
     /// The full set of values the API accepts today. Used to validate
     /// `--model` overrides in the CLI before spending an upload on a typo.

@@ -51,7 +51,6 @@ struct RecordView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 32)
-        .navigationTitle("Record")
         .onAppear { session.refresh() }
         .alert(
             "Recording problem",
@@ -124,9 +123,9 @@ struct RecordView: View {
                     if session.isActive {
                         await session.stop()
                     } else {
-                        // Anything playing from the library is coming out of
-                        // the speakers and would be recorded back in.
-                        services.libraryPlayback.stop()
+                        // Nothing to silence first: selecting the Record tab
+                        // tore down whichever recording was open, and the
+                        // editor releases the audio device on the way out.
                         await session.start()
                     }
                 }
@@ -238,9 +237,8 @@ struct RecordView: View {
         ) {
             HStack(spacing: 8) {
                 Button("Dismiss") { session.dismissSavedConfirmation() }
-                Button("Show in Library") {
-                    services.navigation.section = .recordings
-                    services.library.selection = saved.id
+                Button("Open Recording") {
+                    services.navigation.openRecording(saved.id)
                     session.dismissSavedConfirmation()
                 }
             }
@@ -331,6 +329,8 @@ struct NoticeBanner<Accessory: View>: View {
 /// the one place that fixes it.
 struct APIKeyBanner: View {
 
+    @Environment(AppServices.self) private var services
+
     var body: some View {
         NoticeBanner(
             icon: "key.horizontal.fill",
@@ -338,9 +338,10 @@ struct APIKeyBanner: View {
             title: "Transcription is off",
             message: "Add your AssemblyAI key in Settings to transcribe. Recordings are saved either way."
         ) {
-            SettingsLink {
-                Text("Open Settings…")
-            }
+            // Was a `SettingsLink`, which opened the separate Settings window.
+            // Settings is a tab now, so this is a plain navigation — and the
+            // window stays where it is.
+            Button("Open Settings…") { services.navigation.select(.settings) }
         }
     }
 }

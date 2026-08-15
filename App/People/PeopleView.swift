@@ -45,7 +45,6 @@ struct PeopleView: View {
 
     var body: some View {
         splitOrEmptyState
-            .navigationTitle("People")
             .toolbar { addPersonToolbarItem }
             .task { await model.reload() }
             .sheet(item: $enrollment) { request in

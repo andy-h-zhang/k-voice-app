@@ -33,9 +33,6 @@ final class AppServices {
     let jobStatus: JobStatusStore
     let speakerModelState: SpeakerModelState
     let library: LibraryModel
-
-    /// Plays a recording straight from the library list, without opening it.
-    let libraryPlayback = LibraryPlayback()
     let transcription: TranscriptionCoordinator
     let recorder: RecordingSessionModel
     let navigation = NavigationModel()

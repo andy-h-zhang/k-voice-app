@@ -26,18 +26,26 @@ public struct SettingsSnapshot: Sendable, Equatable {
     /// CoreAudio device UID of the chosen input, or nil for the system default.
     public var inputDeviceUID: String?
 
+    /// Which speech model — and whether a fallback is allowed — this job asks
+    /// for. Part of the snapshot rather than a job "knob" for the same reason
+    /// the keyterms are: it is a user setting, and the one in force at submit
+    /// time is the one that must govern the request.
+    public var speechModelPreference: SpeechModelPreference
+
     public init(
         storageFolderURL: URL,
         similarityThreshold: Float,
         keyterms: [String],
         defaultExportFormat: ExportFormat,
-        inputDeviceUID: String?
+        inputDeviceUID: String?,
+        speechModelPreference: SpeechModelPreference = .default
     ) {
         self.storageFolderURL = storageFolderURL
         self.similarityThreshold = similarityThreshold
         self.keyterms = keyterms
         self.defaultExportFormat = defaultExportFormat
         self.inputDeviceUID = inputDeviceUID
+        self.speechModelPreference = speechModelPreference
     }
 }
 
@@ -60,6 +68,7 @@ public final class SettingsStore: @unchecked Sendable {
         public static let keyterms = "kvoice.settings.keyterms"
         public static let defaultExportFormat = "kvoice.settings.defaultExportFormat"
         public static let inputDeviceUID = "kvoice.settings.inputDeviceUID"
+        public static let speechModelPreference = "kvoice.settings.speechModelPreference"
     }
 
     /// Settings-UI range for the threshold slider (plan §3 decision 7).
@@ -90,7 +99,7 @@ public final class SettingsStore: @unchecked Sendable {
     public func removeAll() {
         for key in [
             Key.storageFolderPath, Key.similarityThreshold, Key.keyterms,
-            Key.defaultExportFormat, Key.inputDeviceUID
+            Key.defaultExportFormat, Key.inputDeviceUID, Key.speechModelPreference
         ] {
             defaults.removeObject(forKey: key)
         }
@@ -166,6 +175,18 @@ public final class SettingsStore: @unchecked Sendable {
         }
     }
 
+    /// Which speech model transcription asks for. Unset (or unrecognized) means
+    /// ``SpeechModelPreference/default`` — 3.5 Pro with no fallback.
+    public var speechModelPreference: SpeechModelPreference {
+        get {
+            guard let raw = defaults.string(forKey: Key.speechModelPreference),
+                let preference = SpeechModelPreference(rawValue: raw)
+            else { return .default }
+            return preference
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.speechModelPreference) }
+    }
+
     // MARK: - Snapshots
 
     /// Reads every setting at once. This is what a job is constructed with.
@@ -175,7 +196,8 @@ public final class SettingsStore: @unchecked Sendable {
             similarityThreshold: similarityThreshold,
             keyterms: keyterms,
             defaultExportFormat: defaultExportFormat,
-            inputDeviceUID: inputDeviceUID
+            inputDeviceUID: inputDeviceUID,
+            speechModelPreference: speechModelPreference
         )
     }
 

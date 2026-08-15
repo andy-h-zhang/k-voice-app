@@ -22,6 +22,7 @@ struct AppSettingsView: View {
             }
 
             APIKeySection()
+            SpeechModelSection()
             StorageSection()
             AudioSection()
             SpeakerMatchingSection()
@@ -29,8 +30,24 @@ struct AppSettingsView: View {
             ExportSection()
         }
         .formStyle(.grouped)
-        .frame(width: 560)
-        .frame(minHeight: 520)
+        // A reading column, not a fixed panel. Both of the frames that used to
+        // be here were written for a standalone Settings window and are actively
+        // harmful now that this is the detail column:
+        //
+        // - `.frame(width: 560)` sets min = ideal = max, so this form would
+        //   report a 560-point *minimum*. At the window's 720-point floor that
+        //   leaves the sidebar 160 — exactly its own floor, with the toolbar
+        //   still pushing — which is the sidebar-collapse failure `RootView`
+        //   documents, arriving through a different door.
+        // - `.frame(minHeight: 520)` would raise the *window's* minimum height
+        //   from 480 to 520 under `.windowResizability(.contentMinSize)`, so the
+        //   window would grow the moment you clicked this tab.
+        //
+        // `maxWidth` centred inside an infinite frame gives the same comfortable
+        // measure in a wide window and compresses cleanly in a narrow one, and
+        // the form scrolls for its own height.
+        .frame(maxWidth: 640)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             services.appSettings.syncInputChoiceFromSettings()
             await services.appSettings.refreshInputDevices()
@@ -160,6 +177,56 @@ private struct APIKeySection: View {
             didSave = false
         } catch {
             saveError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Speech model
+
+/// Which model AssemblyAI is asked for, and whether a fallback is allowed.
+///
+/// `speech_models` is a priority-ordered array, so the server serves the first
+/// model it can and reports which in `speech_model_used`. Naming a fallback is
+/// therefore not free: the keyterm budget drops to the lowest among the models
+/// named, on every request, used or not. The picker states that consequence
+/// rather than leaving it to be discovered.
+private struct SpeechModelSection: View {
+
+    @Environment(AppServices.self) private var services
+
+    private var model: AppSettingsModel { services.appSettings }
+
+    private var preference: Binding<SpeechModelPreference> {
+        Binding(
+            get: { services.appSettings.speechModelPreference },
+            set: { services.appSettings.setSpeechModelPreference($0) }
+        )
+    }
+
+    var body: some View {
+        Section {
+            Picker("Speech model", selection: preference) {
+                ForEach(SpeechModelPreference.allCases) { option in
+                    Text(option.displayName).tag(option)
+                }
+            }
+
+            Text(model.speechModelPreference.explanation)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } header: {
+            Text("Transcription model")
+        } footer: {
+            Text(
+                """
+                Applies to the next transcription — a job takes its settings when it is \
+                submitted, so anything already running finishes on the model it started \
+                with. Recordings remember which model actually transcribed them.
+                """
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
         }
     }
 }
@@ -386,7 +453,7 @@ private struct KeytermsSection: View {
                 HStack(spacing: 8) {
                     Text("\(report.accepted.count) term\(report.accepted.count == 1 ? "" : "s")")
                     Text("·")
-                    Text("\(report.wordsUsed) / \(KeytermReport.wordBudget) words")
+                    Text("\(report.wordsUsed) / \(report.wordBudget) words")
                         .foregroundStyle(report.isOverBudget ? .orange : .secondary)
                         .monospacedDigit()
                 }
@@ -414,9 +481,9 @@ private struct KeytermsSection: View {
                 """
                 One per line. Names, jargon, and product words the transcriber would \
                 otherwise guess at — up to \(AssemblyAIConstants.maxWordsPerKeyterm) words \
-                each and \(KeytermReport.wordBudget) words in total. Anything past those \
-                limits is dropped by the API silently, so the count above shows what will \
-                actually be sent.
+                each and \(model.keytermReport.wordBudget) words in total, which is set by \
+                the transcription model above. Anything past those limits is dropped by the \
+                API silently, so the count above shows what will actually be sent.
                 """
             )
             .font(.callout)

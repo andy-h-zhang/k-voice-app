@@ -76,8 +76,20 @@ struct TranscriptEditorView: View {
             Divider()
             TransportBar(playback: playback)
         }
-        .navigationTitle(model.title)
-        .navigationSubtitle(subtitle)
+        // No `.navigationTitle` or `.navigationSubtitle`. Both moved into
+        // `header`, and the reason is the tab picker.
+        //
+        // A `.principal` toolbar item is *centred*, so AppKit has to balance the
+        // leading and trailing regions around it. The title sits leading,
+        // alongside the traffic lights and the sidebar toggle, and at the 720pt
+        // window floor that side outweighed the trailing side badly enough that
+        // AppKit pushed this screen's own buttons into the `»` overflow menu —
+        // measured, not guessed. Reclaiming the title's width is what makes the
+        // toolbar fit.
+        //
+        // Nothing is lost by it: the header below has the full width of the
+        // window for a title that the toolbar could only ever truncate, and the
+        // sidebar is simultaneously highlighting the same recording.
         .toolbar { toolbarItems }
         // Keyed to the recording, not to "appeared once": if this view is ever
         // reused for a different recording — which is exactly what happens the
@@ -146,6 +158,24 @@ struct TranscriptEditorView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // The recording's name and vitals, evicted from the title bar to
+            // make room for the tab picker. They read better here anyway: full
+            // width instead of truncated, and above the files they describe.
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.title)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(model.title)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             HStack(spacing: 8) {
                 FileDragChip(
                     title: model.audioURL.lastPathComponent,
@@ -269,7 +299,7 @@ struct TranscriptEditorView: View {
                     .buttonStyle(.borderedProminent)
                     .help("Upload this recording and identify its speakers.")
             } else {
-                SettingsLink { Text("Open Settings…") }
+                Button("Open Settings…") { services.navigation.select(.settings) }
                     .buttonStyle(.borderedProminent)
             }
         }
@@ -297,45 +327,53 @@ struct TranscriptEditorView: View {
 
     @ToolbarContentBuilder
     private var toolbarItems: some ToolbarContent {
+        // One item, not three.
+        //
+        // A `.principal` toolbar item is *centred*, so AppKit balances the
+        // leading and trailing regions around it and starts pushing things into
+        // the `»` overflow well before the toolbar looks full. Measured at the
+        // 720-point window floor: three items overflowed, two still overflowed,
+        // one fits. That is a bad place for anything and a *very* bad place for
+        // the app's primary navigation, which is what would go there next.
+        //
+        // Follow Playback loses its one-click toggle and becomes a checked menu
+        // item, which is the right trade — it is a preference you set once per
+        // session, not a control you operate while reading.
         ToolbarItem {
-            Toggle(isOn: $followPlayback) {
-                Label("Follow Playback", systemImage: "text.line.first.and.arrowtriangle.forward")
-            }
-            .help("Scroll the transcript to keep up with playback.")
-        }
+            Menu {
+                Toggle("Follow Playback", isOn: $followPlayback)
+                    .help("Scroll the transcript to keep up with playback.")
 
-        ToolbarItem {
-            RecordingExportMenu(
-                recordingID: model.recordingID,
-                hasTranscript: !model.isEmpty,
-                container: services.container,
-                libraryRoot: services.libraryRoot,
-                defaultFormat: defaultFormat,
-                // Same reason as the drag chip: an export renders from the
-                // rows, so the debounce has to be drained before it reads them.
-                willExport: { model.flushPendingEdits() }
-            ) { result in
-                switch result {
-                case .success(let url):
-                    lastExport = url
-                    model.statusMessage = "Exported \(url.lastPathComponent)."
-                case .failure(let error):
-                    model.errorMessage = "Could not export: \(LibraryModel.describe(error))"
+                Divider()
+
+                RecordingExportMenu(
+                    recordingID: model.recordingID,
+                    hasTranscript: !model.isEmpty,
+                    container: services.container,
+                    libraryRoot: services.libraryRoot,
+                    defaultFormat: defaultFormat,
+                    // Same reason as the drag chip: an export renders from the
+                    // rows, so the debounce has to be drained before it reads them.
+                    willExport: { model.flushPendingEdits() }
+                ) { result in
+                    switch result {
+                    case .success(let url):
+                        lastExport = url
+                        model.statusMessage = "Exported \(url.lastPathComponent)."
+                    case .failure(let error):
+                        model.errorMessage = "Could not export: \(LibraryModel.describe(error))"
+                    }
                 }
-            }
-        }
 
-        ToolbarItem {
-            Button {
-                FinderIntegration.reveal(lastExport ?? model.audioURL)
+                Divider()
+
+                Button(lastExport == nil ? "Show Recording in Finder" : "Show Export in Finder") {
+                    FinderIntegration.reveal(lastExport ?? model.audioURL)
+                }
             } label: {
-                Label("Reveal in Finder", systemImage: "folder")
+                Label("Actions", systemImage: "ellipsis.circle")
             }
-            .help(
-                lastExport == nil
-                    ? "Show this recording's folder in Finder."
-                    : "Show the exported transcript in Finder."
-            )
+            .help("Export this transcript, show it in Finder, or follow playback.")
         }
     }
 

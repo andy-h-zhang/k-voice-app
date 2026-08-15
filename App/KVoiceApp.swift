@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// KVoice — a meeting recorder with speaker-aware transcription.
@@ -65,6 +66,21 @@ struct KVoiceApp: App {
         // a section can shrink the window it is shown in.
         .windowResizability(.contentMinSize)
         .commands {
+            // Settings is a tab in the main window now, not a `Settings` scene,
+            // so ⌘, and the app menu's "Settings…" have to be given something to
+            // do — without this they would keep opening a window that no longer
+            // exists, or nothing at all.
+            //
+            // `openWindow` first, because the user may have closed the window
+            // with ⌘W: setting a route on a window that is not on screen is a
+            // silent no-op, and it is the one path that never comes up in
+            // ordinary testing.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { showSettings() }
+                    .keyboardShortcut(",", modifiers: .command)
+                    .disabled(services == nil)
+            }
+
             // Replaces New/Open — KVoice has no documents to open — with the
             // two places its files actually live. The File menu is where a Mac
             // user looks for "where is this saved", and it works from any
@@ -84,15 +100,30 @@ struct KVoiceApp: App {
             }
         }
 
-        Settings {
-            switch bootstrap {
-            case .ready(let services):
-                AppSettingsView()
-                    .environment(services)
-            case .failed(let message, let path):
-                BootstrapFailureView(message: message, path: path)
-            }
-        }
+        // There is deliberately no `Settings` scene. Settings is the third tab
+        // in the main window: the API key gates transcription entirely, and the
+        // input device and matching threshold are things you change while
+        // looking at what they affect — none of which is well served by a
+        // separate window you have to dismiss to get back to your work.
+    }
+
+    /// The live services, when the app got off the ground.
+    private var services: AppServices? {
+        if case .ready(let services) = bootstrap { return services }
+        return nil
+    }
+
+    /// Selects the Settings tab and brings a window forward to show it in.
+    ///
+    /// The route is set whether or not a window is on screen: `NavigationModel`
+    /// lives in ``AppServices`` and outlives every window, so a user who has
+    /// closed the window with ⌘W and reopens it from the Dock still lands where
+    /// they asked to go.
+    private func showSettings() {
+        guard let services else { return }
+        services.navigation.select(.settings)
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
     }
 
     @ViewBuilder

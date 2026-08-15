@@ -1,93 +1,94 @@
 import SwiftUI
 
-/// The window: a standard `NavigationSplitView` with the app's sections in the
-/// sidebar.
+/// The window: recordings down the left, three tabs across the top, and one
+/// thing at a time in the middle.
 ///
-/// Two columns rather than three. Sections that need their own list-plus-detail
-/// — People does, and Phase 5's transcript editor will — split *inside* the
-/// detail column (see ``PeopleView``) rather than turning this into a
-/// three-column view, so one section's shape never dictates another's.
+/// The sidebar holds the app's *content* — every recording, newest first —
+/// rather than its modes. Modes are the three tabs in the toolbar, and a tab and
+/// a recording are mutually exclusive: exactly one of the four possible things
+/// is in the main body at any moment. See ``NavigationModel`` for why that
+/// exclusion is structural rather than enforced by hand.
 struct RootView: View {
 
     @Environment(AppServices.self) private var services
 
+    /// Pinned open. `NavigationSplitView` will still collapse the sidebar if the
+    /// window cannot fit `sidebar min + detail min` — the width budget is spelled
+    /// out below — but nothing should collapse it on a whim, because it is now
+    /// the only way to reach a recording.
+    @State private var columns: NavigationSplitViewVisibility = .doubleColumn
+
     var body: some View {
         @Bindable var navigation = services.navigation
 
-        NavigationSplitView {
-            List(selection: $navigation.section) {
-                Section("Capture") {
-                    row(.record)
-                }
-                Section("Library") {
-                    row(.recordings)
-                }
-                Section("Voices") {
-                    row(.people)
-                }
-            }
-            // A real range, and one the window can always honour.
-            //
-            // 180…260 was only 80 points of travel, which is why dragging the
-            // divider felt like it did nothing: the sidebar was, for practical
-            // purposes, a fixed column. 160…420 gives 260 points, so the
-            // divider is worth dragging and a wide window can afford a wide
-            // sidebar.
-            //
-            // The floor is the load-bearing number. `NavigationSplitView`
-            // *collapses* the sidebar — the "left panel disappeared" failure —
-            // only when the window cannot fit `sidebar min + detail min`. So
-            // that sum has to stay under the window's own 720-point floor
-            // (`KVoiceApp`), with room to spare:
-            //
-            //     160 (here) + 440 (People, the widest detail) = 600 ≤ 720
-            //
-            // 120 points of slack. Above the floor the split view *squeezes*
-            // the sidebar instead of dropping it, which is exactly the
-            // "adjusts as I resize the window" behaviour asked for: drag the
-            // window narrow and the sidebar gives ground down to 160 before
-            // the detail column yields anything. The ceiling is deliberately
-            // not bounded by that sum — a 420-point sidebar in a 720-point
-            // window simply squeezes back to 720 − 440 = 280, which is still
-            // far above the floor, so no width the user can choose here can
-            // ever make the sidebar vanish.
-            .navigationSplitViewColumnWidth(min: 160, ideal: 220, max: 420)
+        NavigationSplitView(columnVisibility: $columns) {
+            RecordingsSidebar()
+                // A real range, and one the window can always honour.
+                //
+                // The floor is the load-bearing number. `NavigationSplitView`
+                // *collapses* the sidebar — the "left panel disappeared"
+                // failure — only when the window cannot fit `sidebar min +
+                // detail min`. So that sum has to stay under the window's own
+                // 720-point floor (`KVoiceApp`), with room to spare. The detail
+                // column below asks for no minimum at all, which leaves the
+                // whole budget to this column and its content.
+                .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 420)
         } detail: {
             Group {
-                switch navigation.section {
-                case .record, .none:
+                switch navigation.route {
+                case .tab(.record):
                     RecordView()
-                case .recordings:
-                    LibraryView()
-                case .people:
+                case .tab(.people):
                     PeopleView()
+                case .tab(.settings):
+                    AppSettingsView()
+                case .recording(let id) where services.library.row(id: id) != nil:
+                    // `.id(id)` is not decoration, and removing it loses the
+                    // user's work.
+                    //
+                    // Going from one recording to another puts the same view
+                    // type in the same structural position, so SwiftUI updates
+                    // it in place and **never calls `onDisappear`** — and
+                    // `onDisappear` is what runs `flushPendingEdits()`
+                    // (`TranscriptEditorView`). Worse, the editor's
+                    // `.task(id: recordingID)` *would* fire, rebuilding the
+                    // model and throwing the un-flushed keystrokes away with the
+                    // old one. Typing in a transcript and clicking the next
+                    // recording would silently lose the last sentence.
+                    //
+                    // Changing the identity forces a real teardown, so the
+                    // flush, the audio release and the library reload all run
+                    // before the next editor is built. The new instance's
+                    // `.task` may start before the old one's `onDisappear`
+                    // finishes; that is harmless, because every statement in
+                    // that handler acts on state the *old* instance owns or is
+                    // idempotent.
+                    TranscriptEditorScreen(recordingID: id)
+                        .id(id)
+                default:
+                    // A route pointing at a recording that is no longer in the
+                    // library — deleted in Finder, or removed by another window.
+                    // Showing the record screen beats showing nothing.
+                    RecordView()
                 }
             }
-            // Every section fills the detail column, so switching sections
-            // hands AppKit the same layout report rather than a new preferred
-            // size to resize the window to. Without this, a section whose
-            // content has a smaller ideal size drags the window down with it —
-            // the "switching menus resizes the window back to default" bug.
+            // Every section fills the detail column, so switching sections hands
+            // AppKit the same layout report rather than a new preferred size to
+            // resize the window to.
             //
             // `idealWidth`/`idealHeight` are the load-bearing part, and they are
             // what keeps the sidebar on screen. `NavigationSplitView` sizes its
-            // columns from what the detail *reports* it would like, and a
-            // `Text` marked `.fixedSize(horizontal: false, vertical: true)` —
-            // the idiom this app uses in every banner and empty state to stop
-            // macOS truncating a paragraph — reports the width of the whole
-            // string on one line. That is well over a thousand points, it
-            // propagates all the way up here, and the split view answers it by
-            // squeezing the sidebar until its rows have no room left to draw:
-            // the "left panel is empty and I can't click anything" bug, in
-            // People (whose empty state is mostly such paragraphs) and on the
-            // record screen the moment a banner appears — which is exactly what
-            // pressing Stop does.
+            // columns from what the detail *reports* it would like, and a `Text`
+            // marked `.fixedSize(horizontal: false, vertical: true)` — the idiom
+            // this app uses in every banner and empty state to stop macOS
+            // truncating a paragraph — reports the width of the whole string on
+            // one line. That is well over a thousand points, it propagates all
+            // the way up here, and the split view answers it by squeezing the
+            // sidebar until its rows have no room left to draw.
             //
-            // A stated ideal ends the negotiation. The detail column now always
-            // answers 640×480 no matter what is inside it, the sidebar keeps
-            // the width its own `navigationSplitViewColumnWidth` asks for, and
-            // paragraphs go back to wrapping inside whatever width they are
-            // actually given.
+            // A stated ideal ends the negotiation. It has to stay *outside* the
+            // switch, enclosing every branch: Settings is now one of them, and
+            // its grouped form carries three such paragraphs of its own.
             .frame(
                 minWidth: 0,
                 idealWidth: 640,
@@ -96,72 +97,40 @@ struct RootView: View {
                 idealHeight: 480,
                 maxHeight: .infinity
             )
-            // The library player's only controls are on the library rows, so
-            // leaving a two-hour meeting playing behind another section would
-            // give the user audio with no way to stop it.
-            .onChange(of: navigation.section) { _, section in
-                if section != .recordings { services.libraryPlayback.stop() }
+            .toolbar {
+                // Declared here rather than inside the switch, so the tab bar is
+                // not torn down and rebuilt every time the route changes.
+                ToolbarItem(placement: .principal) {
+                    Picker("Section", selection: $navigation.selectedTab) {
+                        ForEach(AppTab.allCases) { tab in
+                            // Tagged with the *optional* type: that is what makes
+                            // "no tab selected" a legitimately unmatched value
+                            // rather than an invalid selection, and it is how a
+                            // recording being open leaves all three segments
+                            // unhighlighted.
+                            Text(tab.title).tag(Optional(tab))
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .help("Record, manage voice profiles, or change settings")
+                }
             }
         }
-    }
-
-    private func row(_ section: SidebarSection) -> some View {
-        HStack(spacing: 6) {
-            Label(section.title, systemImage: section.symbol)
-                .lineLimit(1)
-            if section == .record {
-                Spacer(minLength: 4)
-                recordingIndicator
-            }
-        }
-        .tag(section)
-    }
-
-    /// A red dot and a running clock, on the Record row, whenever a recording
-    /// is live — in *every* section.
-    ///
-    /// The session belongs to ``AppServices``, not to ``RecordView``, so it has
-    /// always kept running when you navigate away. What was missing was any way
-    /// to tell: leave the record screen and every trace of the recording left
-    /// the window with it, which is a bad thing to be unsure about when the
-    /// thing running is a meeting you cannot re-record. The quit guard
-    /// (``AppQuitGuard``) still stands between a live recording and
-    /// termination; this is the same promise made visible.
-    ///
-    /// Two deliberate restraints:
-    ///
-    /// - It reads ``RecordingSessionModel/elapsedSeconds``, never `elapsed`.
-    ///   This view is on screen in every section, and under Observation the
-    ///   10 Hz property would re-render the whole window ten times a second.
-    /// - The dot does not pulse. An animation here would keep the window
-    ///   redrawing forever for decoration, and this app has just finished
-    ///   paying for a main thread that could not keep up.
-    @ViewBuilder
-    private var recordingIndicator: some View {
-        let session = services.recorder
-        let isPaused = session.phase == .paused
-
-        if session.phase == .recording || isPaused {
-            HStack(spacing: 4) {
-                Image(systemName: isPaused ? "pause.fill" : "circle.fill")
-                    .font(.system(size: 7))
-                    .foregroundStyle(isPaused ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.red))
-                Text(Display.duration(TimeInterval(session.elapsedSeconds)))
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(
-                isPaused
-                    ? "Recording paused at \(session.elapsedSeconds) seconds"
-                    : "Recording in progress, \(session.elapsedSeconds) seconds"
-            )
-            .help(
-                isPaused
-                    ? "A recording is paused. Open Record to resume it."
-                    : "A recording is in progress. Open Record to pause or stop it."
-            )
+        // Hoisted out of the library screen: these errors now come from the
+        // sidebar's own actions *and* from the editor's export handler, so the
+        // alert has to be somewhere that presents whatever the route is.
+        .alert(
+            "Library problem",
+            isPresented: Binding(
+                get: { services.library.errorMessage != nil },
+                set: { if !$0 { services.library.errorMessage = nil } }
+            ),
+            presenting: services.library.errorMessage
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
         }
     }
 }
