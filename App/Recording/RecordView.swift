@@ -92,9 +92,28 @@ struct RecordView: View {
                 .monospacedDigit()
                 .foregroundStyle(session.isActive ? .primary : .secondary)
 
-            Text(statusLine)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                // The tally light. "Recording" is a word among other words —
+                // "Paused", "Saving…", "Ready to record" all render the same
+                // way, so telling them apart means reading. A red dot is the
+                // one signal that reads at a glance from across a desk, and it
+                // pulses so a glance also confirms the app is still live rather
+                // than frozen on a stale frame.
+                //
+                // Only during `.recording`: a dot that stayed put while paused
+                // would be a tally light that lies, which is worse than none.
+                if session.phase == .recording {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.red)
+                        .symbolEffect(.pulse, options: .repeating)
+                        .accessibilityHidden(true)
+                }
+
+                Text(statusLine)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
