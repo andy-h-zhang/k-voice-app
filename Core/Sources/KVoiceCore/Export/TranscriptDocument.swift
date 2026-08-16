@@ -41,21 +41,49 @@ public struct TranscriptDocument: Equatable, Sendable {
 
     // MARK: - Output
 
-    /// A run of consecutive utterances by one speaker, rendered as a header
-    /// plus its paragraphs.
+    /// A run of consecutive utterances by one speaker.
     public struct Turn: Equatable, Sendable {
+
+        /// One utterance's worth of text, with the time it was said.
+        ///
+        /// The time is carried per paragraph rather than only on the turn
+        /// because the rendered transcript stamps every line:
+        /// `**Alice** [00:00:19]: …`. A turn's own `startMs` is the first of
+        /// these, which is no longer enough to render its later lines.
+        public struct Paragraph: Equatable, Sendable {
+            public var text: String
+            public var startMs: Int
+
+            public init(text: String, startMs: Int) {
+                self.text = text
+                self.startMs = startMs
+            }
+        }
+
         /// The speaker's display name, never blank.
         public var speaker: String
         /// Start of the turn: the start of its *first* utterance.
         public var startMs: Int
         /// One paragraph per contributing utterance, in transcript order.
-        public var paragraphs: [String]
+        public var paragraphs: [Paragraph]
 
-        public init(speaker: String, startMs: Int, paragraphs: [String]) {
+        public init(speaker: String, startMs: Int, paragraphs: [Paragraph]) {
             self.speaker = speaker
             self.startMs = startMs
             self.paragraphs = paragraphs
         }
+
+        /// Convenience for callers and tests that only care about the words.
+        public init(speaker: String, startMs: Int, texts: [String]) {
+            self.init(
+                speaker: speaker,
+                startMs: startMs,
+                paragraphs: texts.map { Paragraph(text: $0, startMs: startMs) }
+            )
+        }
+
+        /// Just the words, in order — the half of a turn most callers assert on.
+        public var texts: [String] { paragraphs.map(\.text) }
     }
 
     // MARK: - Stored properties
@@ -137,10 +165,13 @@ public struct TranscriptDocument: Equatable, Sendable {
 
             let speaker = speakerName(utterance.speaker, unknownSpeakerLabel: unknownSpeakerLabel)
 
+            let paragraph = Turn.Paragraph(text: text, startMs: utterance.startMs)
             if turns.isEmpty || turns[turns.count - 1].speaker != speaker {
-                turns.append(Turn(speaker: speaker, startMs: utterance.startMs, paragraphs: [text]))
+                turns.append(
+                    Turn(speaker: speaker, startMs: utterance.startMs, paragraphs: [paragraph])
+                )
             } else {
-                turns[turns.count - 1].paragraphs.append(text)
+                turns[turns.count - 1].paragraphs.append(paragraph)
             }
         }
 

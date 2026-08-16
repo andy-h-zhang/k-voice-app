@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// The window: recordings down the left, three tabs across the top, and one
+/// The window: recordings down the left, the mode tabs across the top, and one
 /// thing at a time in the middle.
 ///
 /// The sidebar holds the app's *content* — every recording, newest first —
-/// rather than its modes. Modes are the three tabs in the toolbar, and a tab and
-/// a recording are mutually exclusive: exactly one of the four possible things
-/// is in the main body at any moment. See ``NavigationModel`` for why that
+/// rather than its modes. Modes are the tabs in the toolbar, and a tab and a
+/// recording are mutually exclusive: exactly one thing is in the main body at
+/// any moment. See ``NavigationModel`` for why that
 /// exclusion is structural rather than enforced by hand.
 struct RootView: View {
 
@@ -38,6 +38,8 @@ struct RootView: View {
                 switch navigation.route {
                 case .tab(.record):
                     RecordView()
+                case .tab(.vocab):
+                    VocabView()
                 case .tab(.people):
                     PeopleView()
                 case .tab(.settings):
@@ -106,14 +108,14 @@ struct RootView: View {
                             // Tagged with the *optional* type: that is what makes
                             // "no tab selected" a legitimately unmatched value
                             // rather than an invalid selection, and it is how a
-                            // recording being open leaves all three segments
+                            // recording being open leaves every segment
                             // unhighlighted.
                             Text(tab.title).tag(Optional(tab))
                         }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .help("Record, manage voice profiles, or change settings")
+                    .help("Record, edit vocab, manage voice profiles, or change settings")
                 }
             }
         }

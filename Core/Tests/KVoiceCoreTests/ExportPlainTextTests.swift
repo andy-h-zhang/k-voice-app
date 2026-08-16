@@ -25,19 +25,13 @@ struct ExportPlainTextTests {
 
             2026-08-13 14:30
 
-            Alice — [00:00:05]
+            Alice [00:00:05]: Morning, everyone.
 
-            Morning, everyone.
+            Alice [00:00:09]: Let's start with the roadmap.
 
-            Let's start with the roadmap.
+            Bob [00:01:12]: Morning.
 
-            Bob — [00:01:12]
-
-            Morning.
-
-            Alice — [01:02:03]
-
-            Wrapping up.
+            Alice [01:02:03]: Wrapping up.
 
             """
 
@@ -55,32 +49,31 @@ struct ExportPlainTextTests {
         #expect(!text.contains("_"))
     }
 
-    /// Strip the heading markers from the Markdown export and the plain-text
-    /// export must fall out — that is what "same structure" means.
-    @Test("it is the Markdown export minus the heading markers")
+    /// Strip the markup from the Markdown export and the plain-text export
+    /// must fall out — that is what "same structure" means.
+    @Test("it is the Markdown export minus the markup")
     func sameStructureAsMarkdown() {
         let markdown = MarkdownRenderer.render(ExportFixture.meeting, timeZone: ExportFixture.utc)
         let stripped = markdown
             .components(separatedBy: "\n")
             .map { line -> String in
-                if line.hasPrefix("## ") { return String(line.dropFirst(3)) }
                 if line.hasPrefix("# ") { return String(line.dropFirst(2)) }
-                return line
+                return line.replacingOccurrences(of: "**", with: "")
             }
             .joined(separator: "\n")
 
         #expect(render(ExportFixture.meeting) == stripped)
     }
 
-    @Test("turn headers carry the speaker and a bracketed timestamp")
-    func headerFormat() {
+    @Test("a line carries the speaker, a bracketed timestamp, then the text")
+    func lineFormat() {
         let document = TranscriptDocument(
             title: "T",
             date: ExportFixture.date(2026, 8, 13),
             utterances: [ExportFixture.utterance("Alice", 3_723_000, "Text.")]
         )
 
-        #expect(render(document).contains("Alice — [01:02:03]"))
+        #expect(render(document).contains("Alice [01:02:03]: Text."))
     }
 
     @Test("the file ends with exactly one newline")

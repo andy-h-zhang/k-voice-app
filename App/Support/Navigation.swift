@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// The three modes in the window's tab bar.
+/// The modes in the window's tab bar.
 ///
 /// Settings is one of them. It used to be a `Settings` scene behind ⌘, — the
 /// macOS convention — and that convention assumes settings are a place you visit
@@ -11,6 +11,7 @@ import Observation
 /// those trips left the app.
 enum AppTab: String, Hashable, Identifiable, CaseIterable {
     case record
+    case vocab
     case people
     case settings
 
@@ -19,6 +20,7 @@ enum AppTab: String, Hashable, Identifiable, CaseIterable {
     var title: String {
         switch self {
         case .record: return "Record"
+        case .vocab: return "Vocab"
         case .people: return "People"
         case .settings: return "Settings"
         }
@@ -27,6 +29,7 @@ enum AppTab: String, Hashable, Identifiable, CaseIterable {
     var symbol: String {
         switch self {
         case .record: return "mic.circle"
+        case .vocab: return "character.book.closed"
         case .people: return "person.2"
         case .settings: return "gearshape"
         }

@@ -150,7 +150,10 @@ struct RecordView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .tint(session.isActive ? .secondary : .red)
-            .keyboardShortcut("r", modifiers: [.command])
+            // ⌘R lives in the Go menu, not here. A shortcut on this button only
+            // fires while this button is on screen, so it could not stop a
+            // recording from the transcript you wandered off to read — and two
+            // views claiming one key equivalent is how you get a dead shortcut.
             .disabled(session.phase == .starting || session.phase == .saving)
         }
     }

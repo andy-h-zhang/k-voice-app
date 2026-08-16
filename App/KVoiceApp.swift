@@ -95,6 +95,20 @@ struct KVoiceApp: App {
                 }
                 .disabled(libraryRoot == nil)
             }
+
+            // Navigation lives in a menu rather than on the views it moves to,
+            // and that is the point: a `.keyboardShortcut` on a button only
+            // fires while that button is on screen, so "go to the Vocab tab"
+            // hung off the Vocab tab would only work once you were already
+            // there. Menu commands are window-wide.
+            //
+            // ⌘R is here for the same reason and one more: stopping a
+            // recording has to work from wherever you drifted to while it ran.
+            CommandMenu("Go") {
+                if let services {
+                    GoMenu(services: services)
+                }
+            }
         }
 
         // There is deliberately no `Settings` scene. Settings is the third tab

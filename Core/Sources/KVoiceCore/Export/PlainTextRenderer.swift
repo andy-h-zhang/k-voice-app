@@ -2,18 +2,19 @@ import Foundation
 
 /// Renders a ``TranscriptDocument`` as plain text.
 ///
-/// Structurally identical to the Markdown export — title, date, `Speaker —
-/// [hh:mm:ss]` headers, blank-line-separated paragraphs — with no markup at
-/// all, per `docs/spec.md` §Export.
+/// Structurally identical to the Markdown export — title, date, one line per
+/// utterance — with no markup at all, per `docs/spec.md` §Export. The speaker's
+/// name is not wrapped in asterisks here: in a file nothing will render, `**`
+/// is not bold but two characters the reader has to look past.
 ///
 /// ```text
 /// Weekly sync
 ///
 /// 2026-08-13 14:30
 ///
-/// Alice — [00:00:05]
+/// Alice [00:00:05]: Morning, everyone.
 ///
-/// Morning, everyone.
+/// Bob [00:01:12]: Morning.
 /// ```
 public enum PlainTextRenderer {
 
@@ -24,7 +25,7 @@ public enum PlainTextRenderer {
             document,
             timeZone: timeZone,
             titlePrefix: "",
-            speakerPrefix: ""
+            speakerEmphasis: ""
         )
     }
 }

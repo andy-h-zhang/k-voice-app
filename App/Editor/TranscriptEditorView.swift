@@ -39,8 +39,14 @@ struct TranscriptEditorScreen: View {
 ///
 /// Turns with `Speaker — [hh:mm:ss]` headers, paragraphs that edit in place,
 /// synced playback along the bottom, and every speaker operation the spec asks
-/// for. The grouping is `TranscriptDocument`'s, so what is on screen is exactly
-/// what an export produces.
+/// for.
+///
+/// The grouping is `TranscriptDocument`'s, so the screen and the exports agree
+/// on *what* the turns are and which utterance each paragraph came from. They
+/// no longer look alike: an exported transcript puts one utterance per line
+/// with the speaker inline, which reads well and edits badly — a paragraph you
+/// are typing into needs to be its own field, under a header, not a run-on line
+/// with a name and a timestamp in front of it.
 ///
 /// ## It opens for recordings with no transcript, too
 ///
@@ -439,7 +445,7 @@ struct TranscriptEditorView: View {
     /// Puts the transcript on the clipboard as plain text.
     ///
     /// Deliberately the plain-text *export*, character for character — title,
-    /// date, and `Speaker — [hh:mm:ss]` headers — rather than a second,
+    /// date, and `Alice [00:00:05]: …` lines — rather than a second,
     /// slightly-different rendering that would make a pasted transcript
     /// disagree with an exported one.
     private func copyTranscript() {

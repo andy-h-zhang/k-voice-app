@@ -78,8 +78,8 @@ Transcript editor:
 
 Per recording:
 
-- **Markdown** — `## Speaker — [hh:mm:ss]` turn headers with paragraphs
-- **Plain text** — same structure, no formatting
+- **Markdown** — one line per utterance: `**Speaker** [hh:mm:ss]: text`, under a `#` title and the recording date
+- **Plain text** — same structure, no markup: `Speaker [hh:mm:ss]: text` (asterisks in a file nothing renders are characters to look past, not bold)
 - Both are written automatically when transcription finishes and rewritten whenever the transcript changes — an edited paragraph, a renamed or merged speaker — so the files on disk always match what the app shows. There is no export action and no default-format setting
 - "Reveal in Finder" and drag-out of the audio and both transcripts, each a real file in the project folder
 - Filenames follow the recording's folder name
@@ -90,8 +90,9 @@ Per recording:
 - AssemblyAI API key (Keychain-stored, pasted by the user)
 - Storage folder
 - Similarity threshold
-- Keyterms list
 - Input device selection
+
+Keyterms moved out of Settings into their own **Vocab** tab: the list grows with use rather than being configured once, and the word-budget arithmetic is something to watch while editing.
 
 ## Out of scope for v1 (planned later)
 

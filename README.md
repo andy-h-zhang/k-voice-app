@@ -71,6 +71,49 @@ Both are Debug-only: the fixture and the previews are behind `#if DEBUG`, which
 `project.yml` sets explicitly under `settings ▸ configs ▸ Debug`. Nothing in
 this section ships in a Release build.
 
+## Vocab
+
+The **Vocab** tab is the list of words the transcriber would otherwise guess at
+— people's names, product names, acronyms. Every term is sent with each
+transcription as AssemblyAI's `keyterms_prompt`, which biases the recognizer
+towards spelling them your way. The tab shows the arithmetic as you type,
+because the API's limits are real and silent: a term over six words is ignored,
+and the whole list is capped by a total word budget that depends on the model.
+
+It is text, not audio, and it cannot be otherwise: AssemblyAI accepts no audio
+exemplars for custom vocabulary, and the on-device model that *does* take clips
+is the speaker embedder, which characterizes a voice rather than a vocabulary.
+Recording a clip of yourself saying a term would have nothing to send it to.
+Clips belong in **People**, where they build voice profiles.
+
+This was a text box in Settings. It moved because vocabulary is not something
+you configure once — it grows every time a meeting invents a word.
+
+## Keyboard shortcuts
+
+All of these live in the **Go** menu (`App/Support/GoMenu.swift`) rather than on
+the views they act on. A `.keyboardShortcut` only fires while its view is on
+screen, which is fine for ⌘⇧C inside the transcript editor and useless for
+navigation — "go to People" hung off the People tab would only work once you
+were already there. Menu commands are window-wide, and they show up in the menu
+bar, which a bare key binding never does.
+
+| Key | Does |
+|---|---|
+| ⌘R | Starts a recording, or stops the one that is running |
+| ⌘1 – ⌘4 | Record, Vocab, People, Settings |
+| ⌃1 – ⌃8 | The 1st–8th most recent recording |
+| ⌃9 | The oldest recording |
+
+Tab numbers follow **position**, so they always match the order on screen;
+inserting a tab renumbers everything after it. In a library of fewer than ten
+recordings ⌃9 lands on the same one as a numbered key — "the bottom of the
+list" is somewhere people navigate to, and it should not become a no-op just
+because the list is short.
+
+⌘R stopping a recording also switches to the Record tab, because stopping
+leaves a name to type and the field for it is there.
+
 ## Versioning — bump this by hand before every release
 
 Nothing bumps the version for you. Do it yourself, in `project.yml`, **before**
@@ -187,6 +230,19 @@ Both transcripts are written the moment transcription finishes and rewritten
 whenever you edit a paragraph or rename a speaker, so what is on disk always
 matches what the app shows. There is no export step and no format setting —
 Markdown for reading, plain text for everything that does not understand it.
+
+They read one line per utterance, with the speaker inline:
+
+```markdown
+**Alice** [00:00:05]: Morning, everyone.
+
+**Bob** [00:00:41]: Thursday works for me.
+```
+
+The plain-text file is the same without the asterisks. The editor still shows
+speaker headers above their paragraphs — the two agree on what the turns are,
+but a paragraph you are typing into wants to be its own field, not a run-on line
+behind a name and a timestamp.
 
 Renaming a recording renames its folder and every file inside it; deleting one
 trashes the lot. A backup of the root is a backup of everything.

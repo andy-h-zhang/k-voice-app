@@ -26,7 +26,6 @@ struct AppSettingsView: View {
             StorageSection()
             AudioSection()
             SpeakerMatchingSection()
-            KeytermsSection()
         }
         .formStyle(.grouped)
         // A reading column, not a fixed panel. Both of the frames that used to
@@ -417,72 +416,6 @@ private struct SpeakerMatchingSection: View {
                 How close a voice has to be to an enrolled profile before KVoice puts a name \
                 to it. Applies to the next transcription — speakers already matched keep the \
                 threshold they were judged against, so a change here is never retroactive.
-                """
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
-        }
-    }
-}
-
-// MARK: - Keyterms
-
-private struct KeytermsSection: View {
-
-    @Environment(AppServices.self) private var services
-
-    private var model: AppSettingsModel { services.appSettings }
-
-    var body: some View {
-        @Bindable var model = services.appSettings
-
-        Section {
-            VStack(alignment: .leading, spacing: 8) {
-                TextEditor(text: $model.keytermsText)
-                    .font(.body.monospaced())
-                    .frame(minHeight: 120)
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .background(.quinary, in: RoundedRectangle(cornerRadius: 6))
-                    .onChange(of: model.keytermsText) { _, _ in
-                        services.appSettings.commitKeyterms()
-                    }
-
-                let report = model.keytermReport
-                HStack(spacing: 8) {
-                    Text("\(report.accepted.count) term\(report.accepted.count == 1 ? "" : "s")")
-                    Text("·")
-                    Text("\(report.wordsUsed) / \(report.wordBudget) words")
-                        .foregroundStyle(report.isOverBudget ? .orange : .secondary)
-                        .monospacedDigit()
-                }
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-                if let problems = report.problemSummary {
-                    Label(problems, systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if !report.tooLong.isEmpty {
-                    Text(report.tooLong.prefix(3).map { "“\($0)”" }.joined(separator: ", "))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-        } header: {
-            Text("Keyterms")
-        } footer: {
-            Text(
-                """
-                One per line. Names, jargon, and product words the transcriber would \
-                otherwise guess at — up to \(AssemblyAIConstants.maxWordsPerKeyterm) words \
-                each and \(model.keytermReport.wordBudget) words in total, which is set by \
-                the transcription model above. Anything past those limits is dropped by the \
-                API silently, so the count above shows what will actually be sent.
                 """
             )
             .font(.callout)

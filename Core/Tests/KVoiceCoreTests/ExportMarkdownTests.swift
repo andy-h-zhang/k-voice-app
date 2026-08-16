@@ -5,10 +5,10 @@ import Testing
 
 /// The Markdown export, locked to a golden file.
 ///
-/// `docs/spec.md` §Export names this format exactly — `## Speaker —
-/// [hh:mm:ss]` headers with paragraphs — and it is one of the three exports
-/// the acceptance criteria check, so the whole rendered document is asserted
-/// rather than a few substrings.
+/// `docs/spec.md` §Export names this format exactly — one line per utterance,
+/// `**Speaker** [hh:mm:ss]: text` — and it is one of the exports the acceptance
+/// criteria check, so the whole rendered document is asserted rather than a few
+/// substrings.
 @Suite("Export markdown")
 struct ExportMarkdownTests {
 
@@ -25,19 +25,13 @@ struct ExportMarkdownTests {
 
             2026-08-13 14:30
 
-            ## Alice — [00:00:05]
+            **Alice** [00:00:05]: Morning, everyone.
 
-            Morning, everyone.
+            **Alice** [00:00:09]: Let's start with the roadmap.
 
-            Let's start with the roadmap.
+            **Bob** [00:01:12]: Morning.
 
-            ## Bob — [00:01:12]
-
-            Morning.
-
-            ## Alice — [01:02:03]
-
-            Wrapping up.
+            **Alice** [01:02:03]: Wrapping up.
 
             """
 
@@ -46,15 +40,15 @@ struct ExportMarkdownTests {
 
     // MARK: - Structure
 
-    @Test("turn headers are second-level headings with a bracketed timestamp")
-    func headerFormat() {
+    @Test("a line carries the bolded speaker, a bracketed timestamp, then the text")
+    func lineFormat() {
         let document = TranscriptDocument(
             title: "T",
             date: ExportFixture.date(2026, 8, 13),
             utterances: [ExportFixture.utterance("Alice", 3_723_000, "Text.")]
         )
 
-        #expect(render(document).contains("## Alice — [01:02:03]"))
+        #expect(render(document).contains("**Alice** [01:02:03]: Text."))
     }
 
     @Test("the title is a first-level heading and the date follows it")
@@ -71,7 +65,7 @@ struct ExportMarkdownTests {
         let text = render(ExportFixture.meeting)
 
         #expect(!text.contains("\n\n\n"))
-        #expect(text.contains("Morning, everyone.\n\nLet's start with the roadmap."))
+        #expect(text.contains("Morning, everyone.\n\n**Alice** [00:00:09]: Let's start"))
     }
 
     @Test("the file ends with exactly one newline")
@@ -82,8 +76,11 @@ struct ExportMarkdownTests {
         #expect(!text.hasSuffix("\n\n"))
     }
 
-    @Test("a turn with several utterances renders one paragraph each, under one header")
-    func multiParagraphTurn() {
+    /// A run by one speaker repeats their name rather than merging under one
+    /// header. That repetition is the point of the format: every line can be
+    /// quoted, or pointed at by its own timestamp, on its own.
+    @Test("consecutive utterances by one speaker each get their own labelled line")
+    func consecutiveUtterances() {
         let document = TranscriptDocument(
             title: "T",
             date: ExportFixture.date(2026, 8, 13),
@@ -94,8 +91,8 @@ struct ExportMarkdownTests {
         )
         let text = render(document)
 
-        #expect(text.hasSuffix("## Alice — [00:00:00]\n\nOne.\n\nTwo.\n"))
-        #expect(text.components(separatedBy: "## ").count == 2)
+        #expect(text.hasSuffix("**Alice** [00:00:00]: One.\n\n**Alice** [00:00:01]: Two.\n"))
+        #expect(!text.contains("## "))
     }
 
     // MARK: - Edge cases
@@ -127,6 +124,6 @@ struct ExportMarkdownTests {
     func speakerNameIsVerbatim() {
         let document = ExportFixture.document(text: "Hi.", speaker: "A*B")
 
-        #expect(render(document).contains("## A*B — "))
+        #expect(render(document).contains("**A*B** ["))
     }
 }

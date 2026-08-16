@@ -28,7 +28,7 @@ struct ExportTranscriptDocumentTests {
         #expect(result.count == 1)
         #expect(result.first?.speaker == "Alice")
         #expect(result.first?.startMs == 1_500)
-        #expect(result.first?.paragraphs == ["Hello."])
+        #expect(result.first?.texts == ["Hello."])
     }
 
     // MARK: - Merging
@@ -42,7 +42,7 @@ struct ExportTranscriptDocumentTests {
         ])
 
         #expect(result.count == 1)
-        #expect(result.first?.paragraphs == ["One.", "Two.", "Three."])
+        #expect(result.first?.texts == ["One.", "Two.", "Three."])
     }
 
     /// The header must say when the speaker started talking, not when their
@@ -80,7 +80,7 @@ struct ExportTranscriptDocumentTests {
         ])
 
         #expect(result.count == 3)
-        #expect(result.last?.paragraphs == ["Second."])
+        #expect(result.last?.texts == ["Second."])
     }
 
     /// Paragraph *i* of a turn is the *i*-th surviving utterance of that run —
@@ -91,7 +91,7 @@ struct ExportTranscriptDocumentTests {
         let result = turns(texts.enumerated().map { ExportFixture.utterance("Alice", $0.offset * 1_000, $0.element) })
 
         #expect(result.count == 1)
-        #expect(result.first?.paragraphs == texts)
+        #expect(result.first?.texts == texts)
     }
 
     @Test("input order is preserved even when timestamps are not ascending")
@@ -115,7 +115,7 @@ struct ExportTranscriptDocumentTests {
         ])
 
         #expect(result.count == 1)
-        #expect(result.first?.paragraphs == ["Kept."])
+        #expect(result.first?.texts == ["Kept."])
     }
 
     @Test("only blank utterances produce no turns at all")
@@ -137,21 +137,21 @@ struct ExportTranscriptDocumentTests {
         ])
 
         #expect(result.count == 1)
-        #expect(result.first?.paragraphs == ["Before.", "After."])
+        #expect(result.first?.texts == ["Before.", "After."])
     }
 
     @Test("paragraph text is trimmed of surrounding whitespace")
     func textIsTrimmed() {
         let result = turns([ExportFixture.utterance("Alice", 0, "  Padded.\n")])
 
-        #expect(result.first?.paragraphs == ["Padded."])
+        #expect(result.first?.texts == ["Padded."])
     }
 
     @Test("whitespace inside a paragraph is left alone")
     func interiorTextIsUntouched() {
         let result = turns([ExportFixture.utterance("Alice", 0, "Two  spaces and a\ttab.")])
 
-        #expect(result.first?.paragraphs == ["Two  spaces and a\ttab."])
+        #expect(result.first?.texts == ["Two  spaces and a\ttab."])
     }
 
     // MARK: - Speaker names

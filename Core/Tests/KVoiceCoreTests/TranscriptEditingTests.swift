@@ -241,7 +241,7 @@ struct ReassignUtteranceTests {
         fixture.recording.reassign(fixture.recording.orderedUtterances[1], to: slot)
 
         #expect(fixture.turns().map(\.speaker) == ["Unknown Speaker 1", "Dave"])
-        #expect(fixture.turns().map(\.paragraphs) == [["hello"], ["goodbye"]])
+        #expect(fixture.turns().map(\.texts) == [["hello"], ["goodbye"]])
     }
 }
 
@@ -300,7 +300,7 @@ struct MergeSpeakerTests {
         // in order — the invariant the editor maps paragraphs back through.
         let turns = fixture.turns()
         #expect(turns.count == 1)
-        #expect(turns[0].paragraphs == ["one", "two", "three", "four"])
+        #expect(turns[0].texts == ["one", "two", "three", "four"])
         #expect(turns.reduce(0) { $0 + $1.paragraphs.count } == fixture.recording.utterances.count)
     }
 
@@ -425,7 +425,7 @@ struct ParagraphCorrespondenceTests {
             !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
-        let flattened = turns.flatMap(\.paragraphs)
+        let flattened = turns.flatMap(\.texts)
         let expected = surviving.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
         #expect(flattened == expected)
 
@@ -447,7 +447,7 @@ struct ParagraphCorrespondenceTests {
             )
         }
         let turns = TranscriptDocument.turns(from: dense)
-        #expect(turns.flatMap(\.paragraphs) == dense.map(\.text))
+        #expect(turns.flatMap(\.texts) == dense.map(\.text))
     }
 }
 
@@ -467,7 +467,7 @@ struct EditedTranscriptExportTests {
         fixture.recording.orderedUtterances[0].isEdited = true
 
         let document = TranscriptDocument(recording: try fixture.reloaded())
-        #expect(document.turns.map(\.paragraphs) == [["we shipped Universal-3"], ["nice"]])
+        #expect(document.turns.map(\.texts) == [["we shipped Universal-3"], ["nice"]])
     }
 
     @Test("an export carries assigned speaker names, and labels the rest")
@@ -495,7 +495,7 @@ struct EditedTranscriptExportTests {
         let document = TranscriptDocument(recording: try fixture.reloaded())
         #expect(document.turns.count == 1)
         #expect(document.turns[0].speaker == "Bea")
-        #expect(document.turns[0].paragraphs == ["one", "two", "three", "four"])
+        #expect(document.turns[0].texts == ["one", "two", "three", "four"])
     }
 
     @Test("a turn shared by two slots keeps a distinct slot per line")
@@ -545,8 +545,8 @@ struct EditedTranscriptExportTests {
         let markdown = try String(
             contentsOf: project.transcriptURL(.markdown), encoding: .utf8
         )
-        #expect(markdown.contains("## Cleo — [00:00:00]"))
-        #expect(markdown.contains("## Unknown Speaker 1 — [00:00:05]"))
+        #expect(markdown.contains("**Cleo** [00:00:00]: first line"))
+        #expect(markdown.contains("**Unknown Speaker 1** [00:00:05]: second line"))
         #expect(markdown.contains("first line"))
     }
 

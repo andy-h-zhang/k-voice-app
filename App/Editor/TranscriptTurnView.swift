@@ -1,7 +1,8 @@
 import KVoiceCore
 import SwiftUI
 
-/// One speaker turn: the `Speaker — [hh:mm:ss]` header the exports also use,
+/// One speaker turn, shown as a `Speaker — [hh:mm:ss]` header above its
+/// paragraphs,
 /// and its paragraphs.
 struct TurnView: View {
 
