@@ -126,8 +126,8 @@ struct TranscriptEditorView: View {
         // `ModelContext`, and nothing in the model observes the store — so the
         // pane sat on "No Transcript Yet" until the screen was rebuilt, which
         // is exactly what clicking away and back was doing by hand. Reload in
-        // place instead, and the empty state's promise that "the transcript
-        // appears here when it lands" becomes true.
+        // place instead, so "Transcribing now." gives way to the transcript on
+        // its own rather than stranding the user on a finished job.
         //
         // Keyed on the *running* set rather than a `.done` event because
         // `markFinished` fires after the job's terminal event, so the rows are
@@ -415,8 +415,7 @@ struct TranscriptEditorView: View {
 
     private var emptyStateDescription: String {
         if isTranscribing {
-            return "Transcribing now. You can play the recording while you wait — "
-                + "the transcript appears here when it lands."
+            return "Transcribing now."
         }
         if services.hasAPIKey {
             return "Play the recording with the controls below, or transcribe it to "
