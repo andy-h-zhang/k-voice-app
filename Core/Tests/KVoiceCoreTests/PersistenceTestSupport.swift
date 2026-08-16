@@ -80,7 +80,6 @@ struct RecordingFixture {
             storageFolderURL: root.url,
             similarityThreshold: ClusterMatcher.defaultThreshold,
             keyterms: [],
-            defaultExportFormat: .markdown,
             inputDeviceUID: nil
         )
     }

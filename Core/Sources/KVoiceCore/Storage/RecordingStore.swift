@@ -1,48 +1,102 @@
 import AVFoundation
 import Foundation
 
-/// One recording's folder on disk.
+/// One recording's folder on disk — a *project*: the audio and every transcript
+/// rendered from it, together under one name.
 ///
 /// ```
 /// <root>/
-/// ├── 2026-08-13 Standup/             ← folderURL   (name == baseName)
-/// │   ├── 2026-08-13 Standup.m4a      ← audioURL
-/// │   └── transcript.raw.json         ← verbatim provider response
-/// └── Transcripts/                    ← RecordingStore.transcriptsFolderURL
-///     └── 2026-08-13 Standup.md       ← rendered exports (.md/.txt/.docx)
+/// └── 2026-08-13 Standup/                      ← folderURL   (name == baseName)
+///     ├── 2026-08-13 Standup Recording.m4a     ← audioURL
+///     ├── 2026-08-13 Standup Transcript.md     ← transcriptURL(.markdown)
+///     ├── 2026-08-13 Standup Transcript.txt    ← transcriptURL(.plainText)
+///     └── transcript.raw.json                  ← verbatim provider response
 /// ```
 ///
-/// Rendered exports deliberately do **not** live here: they share one
-/// `Transcripts/` folder at the library root so a user has a single place to
-/// look for readable transcripts (see ``RecordingStore/transcriptsFolderURL``).
-/// The raw response stays beside the audio, because it is the recording's own
-/// re-processing input rather than a document.
+/// Rendered transcripts used to live in one shared `Transcripts/` folder at the
+/// library root. They do not any more: a recording is a thing you open, and
+/// having to visit a second folder to read what was said in it — matching files
+/// up by name, with no folder to drag as a unit — was the wrong shape. The
+/// price is that `Transcripts/` no longer answers "show me every transcript" in
+/// one place; Finder search does that well enough, and the folder-per-project
+/// is what a user actually moves, copies and shares.
+///
+/// The `Recording` / `Transcript` suffixes are why `baseName` is no longer the
+/// audio file's stem: everything in the folder is named `<baseName> <role>`, so
+/// the role is visible in the filename once the file leaves the folder.
+/// `transcript.raw.json` is the exception — a fixed name, because it is the
+/// recording's own re-processing input rather than a document anyone reads.
 public struct RecordingFolder: Sendable, Equatable, Identifiable {
     public var id: URL { folderURL }
 
     /// The recording's folder.
     public let folderURL: URL
-    /// Filename stem shared by the audio file, the raw transcript, and the
-    /// recording's rendered exports over in `Transcripts/`.
+    /// Filename stem shared by every file in the folder: `YYYY-MM-DD [NAME]`,
+    /// the same string as the folder's own name.
     public let baseName: String
-    /// Extension of the audio file, without the dot.
-    public let audioFileExtension: String
+    /// The audio file's actual name on disk, extension included.
+    ///
+    /// Stored rather than derived from `baseName`, because it is not always
+    /// `<baseName> Recording.m4a`: a library written before this layout has
+    /// `<baseName>.m4a`, and a folder a user renamed in Finder can have
+    /// anything at all. Deriving it would make those recordings' audio
+    /// unreachable — silently, since the folder would still list.
+    public let audioFileName: String
 
+    /// Role suffix on the audio file: `<baseName> Recording.m4a`.
+    public static let audioSuffix = "Recording"
+    /// Role suffix on rendered transcripts: `<baseName> Transcript.md`.
+    public static let transcriptSuffix = "Transcript"
+
+    /// A folder whose audio follows the canonical layout.
+    ///
+    /// Used when *creating* a recording, where the name is this type's to
+    /// choose rather than something to discover.
     public init(folderURL: URL, baseName: String, audioFileExtension: String = "m4a") {
+        let ext = audioFileExtension.isEmpty ? "m4a" : audioFileExtension.lowercased()
+        self.init(
+            folderURL: folderURL,
+            baseName: baseName,
+            audioFileName: "\(baseName) \(Self.audioSuffix).\(ext)"
+        )
+    }
+
+    /// A folder whose audio is whatever is actually on disk.
+    public init(folderURL: URL, baseName: String, audioFileName: String) {
         self.folderURL = folderURL
         self.baseName = baseName
-        self.audioFileExtension = audioFileExtension
+        self.audioFileName = audioFileName
+    }
+
+    /// Extension of the audio file, without the dot.
+    public var audioFileExtension: String {
+        let ext = (audioFileName as NSString).pathExtension
+        return ext.isEmpty ? "m4a" : ext
     }
 
     /// The recording's audio file.
     public var audioURL: URL {
-        fileURL(withExtension: audioFileExtension)
+        folderURL.appendingPathComponent(audioFileName)
     }
 
-    /// A sibling file sharing the base name, e.g. `transcript.raw.json`'s
-    /// title-named cousins.
-    public func fileURL(withExtension pathExtension: String) -> URL {
-        folderURL.appendingPathComponent("\(baseName).\(pathExtension)")
+    /// Where the audio *should* live under the current layout.
+    ///
+    /// Differs from ``audioURL`` only on a folder the migration has not
+    /// reached yet; that difference is exactly what the migration acts on.
+    public var canonicalAudioURL: URL {
+        folderURL.appendingPathComponent("\(baseName) \(Self.audioSuffix).\(audioFileExtension)")
+    }
+
+    /// The rendered transcript in `format`.
+    public func transcriptURL(_ format: ExportFormat) -> URL {
+        folderURL.appendingPathComponent(
+            "\(baseName) \(Self.transcriptSuffix).\(format.fileExtension)"
+        )
+    }
+
+    /// Every transcript this recording can have, whether or not it exists yet.
+    public var transcriptURLs: [URL] {
+        ExportFormat.allCases.map(transcriptURL)
     }
 }
 
@@ -71,63 +125,34 @@ public struct RecordingStore: Sendable {
         return documents.appendingPathComponent(appName, isDirectory: true)
     }
 
-    // MARK: - Transcripts folder
+    // MARK: - The former transcripts folder
 
-    /// The one folder holding every rendered export.
+    /// The shared exports folder that libraries written before the
+    /// project-folder layout still have.
     ///
-    /// A reserved name under the library root, so it is a sibling of the
-    /// recording folders rather than inside one. ``recordings()`` skips it by
-    /// name and never reports it as a recording.
-    public static let transcriptsFolderName = "Transcripts"
+    /// Nothing writes here any more — ``LibraryMigration`` empties it into the
+    /// recording folders and removes it. The name survives so that
+    /// ``recordings()`` keeps skipping it on a library that has not been
+    /// migrated yet, and so the migration has one place to read it from.
+    public static let legacyTranscriptsFolderName = "Transcripts"
 
     /// `<root>/Transcripts`, for callers that only have a root URL.
-    public static func transcriptsFolderURL(inLibraryRoot root: URL) -> URL {
-        root.appendingPathComponent(transcriptsFolderName, isDirectory: true)
+    public static func legacyTranscriptsFolderURL(inLibraryRoot root: URL) -> URL {
+        root.appendingPathComponent(legacyTranscriptsFolderName, isDirectory: true)
     }
 
-    /// Where every rendered export (`.md`, `.txt`, `.docx`) is written.
-    ///
-    /// One shared folder rather than one file per recording folder: a user
-    /// looking for "the transcript of Tuesday's standup" should find every
-    /// transcript in one place, and the File menu can point at it. The raw
-    /// `transcript.raw.json` stays in the recording's own folder — it is
-    /// re-processing input, not a document.
-    ///
-    /// Created lazily. Nothing creates it at launch, so a library that has
-    /// never exported anything does not grow an empty folder.
-    public var transcriptsFolderURL: URL {
-        Self.transcriptsFolderURL(inLibraryRoot: rootURL)
+    /// This library's legacy exports folder, whether or not it exists.
+    public var legacyTranscriptsFolderURL: URL {
+        Self.legacyTranscriptsFolderURL(inLibraryRoot: rootURL)
     }
 
-    /// Creates the transcripts folder if it does not exist yet.
-    @discardableResult
-    public func createTranscriptsFolderIfNeeded() throws -> URL {
-        let folder = transcriptsFolderURL
-        if operations.fileExists(at: folder) {
-            guard operations.isDirectory(at: folder) else {
-                throw StorageError.notADirectory(path: folder.path)
-            }
-            return folder
-        }
-        do {
-            try operations.createDirectory(at: folder)
-        } catch {
-            throw StorageError.folderCreationFailed(
-                path: folder.path,
-                reason: error.localizedDescription
-            )
-        }
-        return folder
-    }
-
-    /// The rendered exports belonging to one recording, by its base name.
+    /// The legacy exports belonging to one recording, by its old base name.
     ///
-    /// Matches on the `<baseName>.` prefix — the same rule ``rename(_:to:)``
-    /// uses inside the recording's folder — so `.md`, `.txt` and `.docx` are
-    /// all found in one pass without hard-coding the format list. Returns
-    /// nothing when the folder has never been created.
-    public func transcriptExports(forBaseName baseName: String) throws -> [URL] {
-        let folder = transcriptsFolderURL
+    /// Matches on the `<baseName>.` prefix, so `.md`, `.txt` and `.docx` are
+    /// all found in one pass. Returns nothing once the folder is gone, which
+    /// is what makes the migration idempotent.
+    public func legacyTranscriptExports(forBaseName baseName: String) throws -> [URL] {
+        let folder = legacyTranscriptsFolderURL
         guard operations.fileExists(at: folder), operations.isDirectory(at: folder) else {
             return []
         }
@@ -246,35 +271,44 @@ public struct RecordingStore: Sendable {
 
     /// Every recording folder under the root, by name.
     ///
-    /// A folder counts as a recording once it holds an audio file; the base
-    /// name is read from that file rather than assumed, so a folder someone
-    /// renamed by hand in Finder still resolves.
+    /// A folder counts as a recording once it holds an audio file. The base
+    /// name is the folder's own name — the audio inside is expected to be
+    /// `<folder> Recording.<ext>` — but the audio file is *found* rather than
+    /// assumed, in three descending preferences, so neither an unmigrated
+    /// library nor a folder somebody renamed in Finder drops out of the list:
+    ///
+    /// 1. `<folder> Recording.<ext>` — the current layout.
+    /// 2. `<folder>.<ext>` — the layout before transcripts moved in, where the
+    ///    audio was named exactly after its folder.
+    /// 3. Any audio file at all, alphabetically — a hand-renamed folder.
     public func recordings(audioFileExtension: String = "m4a") throws -> [RecordingFolder] {
         guard operations.fileExists(at: rootURL) else { return [] }
 
         let entries = try operations.contentsOfDirectory(at: rootURL)
-        let folders: [RecordingFolder] = try entries.compactMap { entry in
+        let folders: [RecordingFolder] = try entries.compactMap {
+            (entry: URL) -> RecordingFolder? in
             guard operations.isDirectory(at: entry) else { return nil }
-            // Reserved: exports, not a recording. It holds no audio today, so
-            // this is belt-and-braces — but a user dropping an `.m4a` in there
-            // should not conjure a phantom recording called "Transcripts".
-            guard entry.lastPathComponent != Self.transcriptsFolderName else { return nil }
+            // Reserved on an unmigrated library: exports, not a recording. A
+            // user dropping an `.m4a` in there should not conjure a phantom
+            // recording called "Transcripts".
+            guard entry.lastPathComponent != Self.legacyTranscriptsFolderName else { return nil }
 
             let contents = try operations.contentsOfDirectory(at: entry)
             let audioFiles = contents.filter {
                 $0.pathExtension.lowercased() == audioFileExtension.lowercased()
             }
-            // Prefer the file named after the folder; otherwise take the
-            // first, so a hand-renamed folder still yields a usable base.
+
             let folderName = entry.lastPathComponent
-            let match = audioFiles.first { $0.deletingPathExtension().lastPathComponent == folderName }
+            let stem = { (url: URL) in url.deletingPathExtension().lastPathComponent }
+            let match = audioFiles.first { stem($0) == "\(folderName) \(RecordingFolder.audioSuffix)" }
+                ?? audioFiles.first { stem($0) == folderName }
                 ?? audioFiles.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).first
             guard let match else { return nil }
 
             return RecordingFolder(
                 folderURL: entry,
-                baseName: match.deletingPathExtension().lastPathComponent,
-                audioFileExtension: match.pathExtension
+                baseName: folderName,
+                audioFileName: match.lastPathComponent
             )
         }
 
@@ -283,9 +317,8 @@ public struct RecordingStore: Sendable {
 
     // MARK: - Renaming
 
-    /// Renames a recording: its folder, its audio file, every sibling file
-    /// sharing the base name (the raw transcript), and the recording's
-    /// rendered exports over in `Transcripts/`.
+    /// Renames a recording: its folder, and every file inside it named after
+    /// the old base — the audio and both rendered transcripts.
     ///
     /// Filesystem first, database second (`docs/implementation-plan.md` §3
     /// decision 6): files are what the user sees, so the caller only updates
@@ -293,12 +326,18 @@ public struct RecordingStore: Sendable {
     /// made are undone and ``StorageError/renameFailed(from:to:reason:rolledBack:)``
     /// reports whether that undo succeeded.
     ///
-    /// ## Why the exports are part of the same transaction
+    /// ## What is *not* renamed
     ///
-    /// `Transcripts/` is shared by every recording, so an export left under
-    /// the old title is not merely untidy — it is indistinguishable from
-    /// another recording's file. The moves therefore join the same
-    /// `completed` list and unwind with everything else, folder move included.
+    /// `transcript.raw.json` has a fixed name, deliberately: it is the
+    /// provider's verbatim response, re-processing input rather than a
+    /// document, and nothing outside the folder ever refers to it by name.
+    ///
+    /// This used to also move the recording's exports in the shared
+    /// `Transcripts/` folder, in the same transaction, because a stale export
+    /// there was indistinguishable from another recording's file. With
+    /// transcripts inside the project folder that whole class of collision is
+    /// gone — the folder move carries them along by definition, and only the
+    /// per-file rename below is left.
     ///
     /// - Returns: The recording's new location. May carry a collision suffix.
     public func rename(_ folder: RecordingFolder, to newTitle: String) throws -> RecordingFolder {
@@ -312,19 +351,8 @@ public struct RecordingStore: Sendable {
 
         let newBase = FilenameSanitizer.uniqueName(for: sanitized) { candidate in
             // The recording's own folder is not a collision with itself.
-            if candidate != currentFolderName,
-                operations.fileExists(at: parent.appendingPathComponent(candidate)) {
-                return true
-            }
-            // Nor are its own exports — but *another* recording's exports in
-            // the shared folder are. Suffixing here beats discovering the
-            // clash half-way through the move.
-            if candidate != folder.baseName,
-                let exports = try? transcriptExports(forBaseName: candidate),
-                !exports.isEmpty {
-                return true
-            }
-            return false
+            candidate != currentFolderName
+                && operations.fileExists(at: parent.appendingPathComponent(candidate))
         }
 
         guard newBase != folder.baseName || newBase != currentFolderName else {
@@ -332,20 +360,24 @@ public struct RecordingStore: Sendable {
         }
 
         var completed: [(from: URL, to: URL)] = []
+        var newAudioFileName = folder.audioFileName
         do {
             // 1. Files inside the folder, before the folder itself: their
             //    URLs are only valid while the folder is where we left it.
             //    Skipped when only the folder is being renamed, since moving
             //    a file onto itself is a collision, not a rename.
             if newBase != folder.baseName {
-                let prefix = folder.baseName + "."
                 let contents = try operations.contentsOfDirectory(at: folder.folderURL)
                 for url in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                     let name = url.lastPathComponent
-                    guard name.hasPrefix(prefix) else { continue }
+                    // Both separators: `<base> Recording.m4a` in the current
+                    // layout, `<base>.m4a` in one this migration has not
+                    // reached. Renaming a folder must not depend on having
+                    // migrated it first.
+                    guard name.hasPrefix(folder.baseName + " ")
+                        || name.hasPrefix(folder.baseName + ".")
+                    else { continue }
 
-                    // Keep everything after the base name, so "<base>.raw.json"
-                    // and "<base>.m4a" both follow the rename.
                     let remainder = String(name.dropFirst(folder.baseName.count))
                     let destination = folder.folderURL.appendingPathComponent(newBase + remainder)
                     guard !operations.fileExists(at: destination) else {
@@ -354,12 +386,14 @@ public struct RecordingStore: Sendable {
 
                     try operations.moveItem(at: url, to: destination)
                     completed.append((from: url, to: destination))
+                    if name == folder.audioFileName {
+                        newAudioFileName = destination.lastPathComponent
+                    }
                 }
             }
 
-            // 2. The folder. Recorded in `completed` because step 3 follows
-            //    it: a rollback has to put the folder back *before* it can
-            //    undo the moves in step 1, which reversed order guarantees.
+            // 2. The folder, last, so a rollback unwinds it before the moves
+            //    in step 1 — which reversed order guarantees.
             var newFolderURL = folder.folderURL
             if newBase != currentFolderName {
                 let destination = parent.appendingPathComponent(newBase, isDirectory: true)
@@ -371,25 +405,10 @@ public struct RecordingStore: Sendable {
                 newFolderURL = destination
             }
 
-            // 3. Rendered exports in the shared `Transcripts/` folder, which
-            //    is at the library root and therefore unmoved by step 2.
-            if newBase != folder.baseName {
-                let transcripts = transcriptsFolderURL
-                for url in try transcriptExports(forBaseName: folder.baseName) {
-                    let remainder = String(url.lastPathComponent.dropFirst(folder.baseName.count))
-                    let destination = transcripts.appendingPathComponent(newBase + remainder)
-                    guard !operations.fileExists(at: destination) else {
-                        throw StorageError.destinationExists(path: destination.path)
-                    }
-                    try operations.moveItem(at: url, to: destination)
-                    completed.append((from: url, to: destination))
-                }
-            }
-
             return RecordingFolder(
                 folderURL: newFolderURL,
                 baseName: newBase,
-                audioFileExtension: folder.audioFileExtension
+                audioFileName: newAudioFileName
             )
         } catch {
             let rolledBack = rollBack(completed)

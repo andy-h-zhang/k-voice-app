@@ -42,7 +42,7 @@ struct StorageLibraryMoveTests {
 
             let movedAudio = destination
                 .appendingPathComponent("Standup", isDirectory: true)
-                .appendingPathComponent("Standup.m4a")
+                .appendingPathComponent("Standup Recording.m4a")
             #expect(try Data(contentsOf: movedAudio) == Data("audio".utf8))
             #expect(exists(destination.appendingPathComponent("Standup/transcript.raw.json")))
 
@@ -227,7 +227,7 @@ struct StorageLibraryMoveTests {
             // Every recording is back where it started, contents intact.
             #expect(names(in: source) == ["Alpha", "Bravo", "Charlie", "Delta"])
             #expect(names(in: destination).isEmpty)
-            let audio = source.appendingPathComponent("Bravo/Bravo.m4a")
+            let audio = source.appendingPathComponent("Bravo/Bravo Recording.m4a")
             #expect(try Data(contentsOf: audio) == Data("Bravo".utf8))
         }
     }

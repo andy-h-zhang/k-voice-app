@@ -525,7 +525,7 @@ struct EditedTranscriptExportTests {
         #expect(Set(perLineSlots).count == 2)
     }
 
-    @Test("all three formats render the edited transcript into a folder")
+    @Test("both formats render the edited transcript into the project folder")
     func writesEveryFormat() throws {
         let fixture = try EditableTranscript([("A", "first line"), ("B", "second line")])
         try fixture.slot("A").assign(try fixture.person(named: "Cleo"))
@@ -534,38 +534,47 @@ struct EditedTranscriptExportTests {
         let folder = try TemporaryDirectory()
         defer { folder.cleanUp() }
 
+        let project = RecordingFolder(folderURL: folder.url, baseName: "Standup")
         let document = TranscriptDocument(recording: try fixture.reloaded())
         for format in ExportFormat.allCases {
-            let url = try Exporter.export(document, as: format, to: folder.url)
-            #expect(url.lastPathComponent == "Standup.\(format.fileExtension)")
+            let url = try Exporter.write(document, as: format, to: project.transcriptURL(format))
+            #expect(url.lastPathComponent == "Standup Transcript.\(format.fileExtension)")
             #expect(FileManager.default.fileExists(atPath: url.path))
         }
 
         let markdown = try String(
-            contentsOf: folder.url.appendingPathComponent("Standup.md"), encoding: .utf8
+            contentsOf: project.transcriptURL(.markdown), encoding: .utf8
         )
         #expect(markdown.contains("## Cleo — [00:00:00]"))
         #expect(markdown.contains("## Unknown Speaker 1 — [00:00:05]"))
         #expect(markdown.contains("first line"))
     }
 
-    @Test("re-exporting after an edit refreshes the file instead of adding another")
+    /// The transcript file is rewritten on a debounce as the user types, so
+    /// "refresh in place" is not a nicety — anything else would fill the
+    /// project folder with numbered copies of a half-finished sentence.
+    @Test("rewriting after an edit refreshes the file instead of adding another")
     func overwrites() throws {
         let fixture = try EditableTranscript([("A", "before")])
         let folder = try TemporaryDirectory()
         defer { folder.cleanUp() }
+        let project = RecordingFolder(folderURL: folder.url, baseName: "Standup")
 
-        try Exporter.export(
-            TranscriptDocument(recording: fixture.recording), as: .markdown, to: folder.url
+        try Exporter.write(
+            TranscriptDocument(recording: fixture.recording),
+            as: .markdown,
+            to: project.transcriptURL(.markdown)
         )
 
         fixture.recording.orderedUtterances[0].text = "after"
-        let second = try Exporter.export(
-            TranscriptDocument(recording: try fixture.reloaded()), as: .markdown, to: folder.url
+        let second = try Exporter.write(
+            TranscriptDocument(recording: try fixture.reloaded()),
+            as: .markdown,
+            to: project.transcriptURL(.markdown)
         )
 
         let files = try FileManager.default.contentsOfDirectory(atPath: folder.url.path)
-        #expect(files.filter { $0.hasSuffix(".md") } == ["Standup.md"])
+        #expect(files.filter { $0.hasSuffix(".md") } == ["Standup Transcript.md"])
         #expect(try String(contentsOf: second, encoding: .utf8).contains("after"))
     }
 }

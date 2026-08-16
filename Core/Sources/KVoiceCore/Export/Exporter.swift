@@ -1,32 +1,21 @@
 import Foundation
 
-/// Writes a ``TranscriptDocument`` to disk in any supported format.
+/// Renders a ``TranscriptDocument`` to bytes, and writes it where it is told.
 ///
-/// The one entry point the app needs: pick a format, pick a folder, get back
-/// the URL of the file that was written — ready to reveal in Finder or hand to
-/// a drag-out provider.
+/// ## Why this no longer names files
 ///
-/// Filenames follow the recording title (`docs/spec.md` §Export), sanitized by
-/// ``FilenameSanitizer`` — the same function that names the recording's folder
-/// and `.m4a`, so an export carries the same name as the audio it came from.
+/// It used to: exports landed in one shared `Transcripts/` folder and took
+/// their name from the recording's title, which is what kept two recordings
+/// from colliding there. That folder is gone — every transcript now lives in
+/// its own recording's folder as `<base> Transcript.md` / `.txt` — so the name
+/// is a property of the *recording's layout*, which is ``RecordingFolder``'s
+/// job and not this type's. Callers pass the exact URL.
 ///
-/// The destination is the caller's choice and always has been: this type knows
-/// nothing about the library layout. The app writes into
-/// ``RecordingStore/transcriptsFolderURL``; a test or a CLI can write anywhere.
+/// Writes are unconditional overwrites. A transcript file is a rendering of
+/// current database state, regenerated whenever that state changes, so the
+/// previous rendering is never worth keeping and a ` 2` suffix would only
+/// produce litter that goes stale the moment it is written.
 public enum Exporter {
-
-    /// What to do when the destination already holds a file of that name.
-    public enum CollisionPolicy: Sendable {
-        /// Replace it. The default: an export is a regenerated artifact of the
-        /// transcript, so re-exporting after an edit should refresh the file
-        /// rather than pile up ` 2`, ` 3` copies. Safe in the app's shared
-        /// `Transcripts/` folder because `RecordingStore.rename` keeps one base
-        /// name per recording there — two recordings cannot hold one filename.
-        case overwrite
-        /// Keep both, adding a ` 2`, ` 3`, … suffix. For exports into a folder
-        /// the app does not own, where an existing file may be unrelated.
-        case uniqueSuffix
-    }
 
     // MARK: - Rendering
 
@@ -43,79 +32,39 @@ public enum Exporter {
             return Data(MarkdownRenderer.render(document, timeZone: timeZone).utf8)
         case .plainText:
             return Data(PlainTextRenderer.render(document, timeZone: timeZone).utf8)
-        case .word:
-            return try DocxRenderer.render(document, timeZone: timeZone)
         }
     }
 
     // MARK: - Writing
 
-    /// Writes `document` into `folder` and returns the file's URL.
+    /// Writes `document` to exactly `fileURL` and returns it.
     ///
-    /// The folder is created if missing. The write is atomic, so a failure
-    /// part-way leaves any previous export intact rather than truncated.
+    /// The enclosing folder is created if missing. The write is atomic, so a
+    /// failure part-way leaves the previous transcript intact rather than
+    /// truncated — which matters more now than it did: this runs on a debounce
+    /// while the user is typing, not once when they ask for a file.
     ///
     /// - Throws: ``ExportError``.
     @discardableResult
-    public static func export(
+    public static func write(
         _ document: TranscriptDocument,
         as format: ExportFormat,
-        to folder: URL,
-        collision: CollisionPolicy = .overwrite,
+        to fileURL: URL,
         timeZone: TimeZone = .current
     ) throws -> URL {
-        try prepare(folder)
+        try prepare(fileURL.deletingLastPathComponent())
 
-        let destination = destinationURL(
-            for: document.title,
-            format: format,
-            in: folder,
-            collision: collision
-        )
         let contents = try data(for: document, format: format, timeZone: timeZone)
-
         do {
-            try contents.write(to: destination, options: .atomic)
+            try contents.write(to: fileURL, options: .atomic)
         } catch {
             throw ExportError.writeFailed(
-                path: destination.path,
+                path: fileURL.path,
                 reason: error.localizedDescription
             )
         }
 
-        return destination
-    }
-
-    // MARK: - Naming
-
-    /// The filename a title exports to: sanitized title plus extension.
-    public static func fileName(for title: String, format: ExportFormat) -> String {
-        "\(FilenameSanitizer.sanitize(title)).\(format.fileExtension)"
-    }
-
-    private static func destinationURL(
-        for title: String,
-        format: ExportFormat,
-        in folder: URL,
-        collision: CollisionPolicy
-    ) -> URL {
-        let base = FilenameSanitizer.sanitize(title)
-
-        switch collision {
-        case .overwrite:
-            return url(folder: folder, base: base, format: format)
-        case .uniqueSuffix:
-            let unique = FilenameSanitizer.uniqueName(for: base) { candidate in
-                FileManager.default.fileExists(
-                    atPath: url(folder: folder, base: candidate, format: format).path
-                )
-            }
-            return url(folder: folder, base: unique, format: format)
-        }
-    }
-
-    private static func url(folder: URL, base: String, format: ExportFormat) -> URL {
-        folder.appendingPathComponent("\(base).\(format.fileExtension)", isDirectory: false)
+        return fileURL
     }
 
     /// Ensures `folder` exists and is a directory.

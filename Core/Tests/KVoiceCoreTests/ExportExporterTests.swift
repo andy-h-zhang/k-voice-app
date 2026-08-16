@@ -3,88 +3,57 @@ import Testing
 
 @testable import KVoiceCore
 
-/// The export facade: render a transcript, name the file after the recording,
-/// put it on disk (`docs/spec.md` §Export — "filenames follow the recording
-/// title").
+/// The export facade: render a transcript and put it at the URL the caller
+/// names (`docs/spec.md` §Export).
+///
+/// Naming moved out of this type when transcripts moved into project folders —
+/// a transcript is `<base> Transcript.md` beside its audio now, which is
+/// ``RecordingFolder``'s business. What is left here is rendering and writing,
+/// so that is what these cover.
 @Suite("Export exporter")
 struct ExportExporterTests {
 
     private let utc = ExportFixture.utc
 
-    private func export(
+    private func write(
         _ document: TranscriptDocument,
         as format: ExportFormat,
-        to folder: URL,
-        collision: Exporter.CollisionPolicy = .overwrite
+        to fileURL: URL
     ) throws -> URL {
-        try Exporter.export(document, as: format, to: folder, collision: collision, timeZone: utc)
+        try Exporter.write(document, as: format, to: fileURL, timeZone: utc)
     }
 
     private func contents(of url: URL) throws -> String {
         String(decoding: try Data(contentsOf: url), as: UTF8.self)
     }
 
-    // MARK: - Naming
+    // MARK: - Writing
 
-    @Test("the file is named after the recording, with the format's extension")
-    func fileNames() throws {
+    @Test("the document is written exactly where it was asked for")
+    func writesToTheGivenURL() throws {
         let directory = try TemporaryDirectory()
         defer { directory.cleanUp() }
+        let destination = directory.file("2026-08-13 Weekly sync Transcript.md")
 
-        #expect(try export(ExportFixture.meeting, as: .markdown, to: directory.url).lastPathComponent
-            == "Weekly sync.md")
-        #expect(try export(ExportFixture.meeting, as: .plainText, to: directory.url).lastPathComponent
-            == "Weekly sync.txt")
-        #expect(try export(ExportFixture.meeting, as: .word, to: directory.url).lastPathComponent
-            == "Weekly sync.docx")
+        let url = try write(ExportFixture.meeting, as: .markdown, to: destination)
+
+        #expect(url == destination)
+        #expect(FileManager.default.fileExists(atPath: destination.path))
     }
 
-    /// The same sanitizer that names the recording's folder and `.m4a`, so an
-    /// export in `Transcripts/` carries the same name as the audio it came
-    /// from and the two are matchable by eye.
-    @Test("a title with illegal filename characters is sanitized")
-    func sanitizesTitle() throws {
+    /// No sanitizing, no suffixing, no title lookup: whatever URL comes in is
+    /// the URL written. The caller composed it from an already-sanitized base
+    /// name, and a second opinion here could only disagree with the folder.
+    @Test("the URL is honoured verbatim, odd characters and all")
+    func doesNotRenameWhatItIsGiven() throws {
         let directory = try TemporaryDirectory()
         defer { directory.cleanUp() }
+        let destination = directory.file("Q1 Q2 Review Transcript.md")
+
         let document = TranscriptDocument(title: "Q1/Q2: Review?", date: .distantPast, turns: [])
+        let url = try write(document, as: .markdown, to: destination)
 
-        let url = try export(document, as: .markdown, to: directory.url)
-
-        #expect(url.lastPathComponent == "Q1 Q2 Review.md")
-        #expect(FileManager.default.fileExists(atPath: url.path))
-    }
-
-    @Test("an untitled recording exports under the fallback name")
-    func untitledFallsBack() throws {
-        let directory = try TemporaryDirectory()
-        defer { directory.cleanUp() }
-        let document = TranscriptDocument(title: "   ", date: .distantPast, turns: [])
-
-        #expect(try export(document, as: .markdown, to: directory.url).lastPathComponent
-            == "\(FilenameSanitizer.fallbackName).md")
-    }
-
-    @Test("the filename helper agrees with what export writes")
-    func fileNameHelper() throws {
-        let directory = try TemporaryDirectory()
-        defer { directory.cleanUp() }
-
-        #expect(Exporter.fileName(for: "Weekly sync", format: .word) == "Weekly sync.docx")
-        #expect(Exporter.fileName(for: "Q1/Q2", format: .plainText) == "Q1 Q2.txt")
-        #expect(
-            try export(ExportFixture.meeting, as: .word, to: directory.url).lastPathComponent
-                == Exporter.fileName(for: ExportFixture.meeting.title, format: .word)
-        )
-    }
-
-    @Test("the file lands inside the requested folder")
-    func writesIntoFolder() throws {
-        let directory = try TemporaryDirectory()
-        defer { directory.cleanUp() }
-
-        let url = try export(ExportFixture.meeting, as: .markdown, to: directory.url)
-
-        #expect(url.deletingLastPathComponent().standardizedFileURL == directory.url.standardizedFileURL)
+        #expect(url.lastPathComponent == "Q1 Q2 Review Transcript.md")
     }
 
     // MARK: - Contents
@@ -95,13 +64,11 @@ struct ExportExporterTests {
         defer { directory.cleanUp() }
         let document = ExportFixture.meeting
 
-        let markdown = try export(document, as: .markdown, to: directory.url)
-        let plain = try export(document, as: .plainText, to: directory.url)
-        let word = try export(document, as: .word, to: directory.url)
+        let markdown = try write(document, as: .markdown, to: directory.file("t.md"))
+        let plain = try write(document, as: .plainText, to: directory.file("t.txt"))
 
         #expect(try contents(of: markdown) == MarkdownRenderer.render(document, timeZone: utc))
         #expect(try contents(of: plain) == PlainTextRenderer.render(document, timeZone: utc))
-        #expect(try Data(contentsOf: word) == (try DocxRenderer.render(document, timeZone: utc)))
     }
 
     @Test("rendering to bytes matches what would be written")
@@ -110,33 +77,28 @@ struct ExportExporterTests {
         defer { directory.cleanUp() }
 
         for format in ExportFormat.allCases {
-            let url = try export(ExportFixture.meeting, as: format, to: directory.url)
+            let url = try write(
+                ExportFixture.meeting,
+                as: format,
+                to: directory.file("t.\(format.fileExtension)")
+            )
             let rendered = try Exporter.data(for: ExportFixture.meeting, format: format, timeZone: utc)
 
             #expect(try Data(contentsOf: url) == rendered, "mismatch for \(format)")
         }
     }
 
-    @Test("the exported .docx on disk is a readable package")
-    func exportedDocxIsAValidPackage() throws {
+    // MARK: - Overwriting
+
+    /// A transcript file is a rendering of current database state, rewritten
+    /// on a debounce as the user types. Anything other than overwrite would
+    /// leave a folder full of stale numbered copies.
+    @Test("rewriting the same URL overwrites in place")
+    func overwritesInPlace() throws {
         let directory = try TemporaryDirectory()
         defer { directory.cleanUp() }
+        let destination = directory.file("Sync Transcript.md")
 
-        let url = try export(ExportFixture.meeting, as: .word, to: directory.url)
-        let archive = try ZipReader.read(try Data(contentsOf: url))
-
-        #expect(archive.entries.count == 5)
-        #expect(archive.entry("word/document.xml") != nil)
-    }
-
-    // MARK: - Collisions
-
-    /// An export is a regenerated artifact: re-exporting should refresh the
-    /// file rather than pile up copies in the transcripts folder.
-    @Test("re-exporting overwrites by default")
-    func overwritesByDefault() throws {
-        let directory = try TemporaryDirectory()
-        defer { directory.cleanUp() }
         let first = TranscriptDocument(
             title: "Sync",
             date: ExportFixture.date(2026, 8, 13),
@@ -148,39 +110,12 @@ struct ExportExporterTests {
             utterances: [ExportFixture.utterance("Alice", 0, "Edited.")]
         )
 
-        let firstURL = try export(first, as: .markdown, to: directory.url)
-        let secondURL = try export(second, as: .markdown, to: directory.url)
+        _ = try write(first, as: .markdown, to: destination)
+        _ = try write(second, as: .markdown, to: destination)
 
-        #expect(firstURL == secondURL)
-        #expect(try contents(of: secondURL).contains("Edited."))
-        #expect(!(try contents(of: secondURL).contains("Original.")))
+        #expect(try contents(of: destination).contains("Edited."))
+        #expect(!(try contents(of: destination).contains("Original.")))
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.url.path).count == 1)
-    }
-
-    @Test("the unique-suffix policy keeps both files")
-    func uniqueSuffixKeepsBoth() throws {
-        let directory = try TemporaryDirectory()
-        defer { directory.cleanUp() }
-
-        let first = try export(ExportFixture.meeting, as: .markdown, to: directory.url, collision: .uniqueSuffix)
-        let second = try export(ExportFixture.meeting, as: .markdown, to: directory.url, collision: .uniqueSuffix)
-        let third = try export(ExportFixture.meeting, as: .markdown, to: directory.url, collision: .uniqueSuffix)
-
-        #expect(first.lastPathComponent == "Weekly sync.md")
-        #expect(second.lastPathComponent == "Weekly sync 2.md")
-        #expect(third.lastPathComponent == "Weekly sync 3.md")
-        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.url.path).count == 3)
-    }
-
-    @Test("collisions are counted per format, not across formats")
-    func collisionsArePerExtension() throws {
-        let directory = try TemporaryDirectory()
-        defer { directory.cleanUp() }
-
-        _ = try export(ExportFixture.meeting, as: .markdown, to: directory.url, collision: .uniqueSuffix)
-        let text = try export(ExportFixture.meeting, as: .plainText, to: directory.url, collision: .uniqueSuffix)
-
-        #expect(text.lastPathComponent == "Weekly sync.txt")
     }
 
     // MARK: - Destinations
@@ -191,14 +126,15 @@ struct ExportExporterTests {
         defer { directory.cleanUp() }
         let nested = directory.url
             .appendingPathComponent("2026-08-13 Standup", isDirectory: true)
-            .appendingPathComponent("exports", isDirectory: true)
+            .appendingPathComponent("nested", isDirectory: true)
+            .appendingPathComponent("Standup Transcript.md")
 
-        let url = try export(ExportFixture.meeting, as: .markdown, to: nested)
+        let url = try write(ExportFixture.meeting, as: .markdown, to: nested)
 
         #expect(FileManager.default.fileExists(atPath: url.path))
     }
 
-    @Test("exporting into a path that is a file fails with a clear error")
+    @Test("writing into a path whose folder is a file fails with a clear error")
     func destinationIsAFile() throws {
         let directory = try TemporaryDirectory()
         defer { directory.cleanUp() }
@@ -206,7 +142,7 @@ struct ExportExporterTests {
         try Data("x".utf8).write(to: file)
 
         #expect(throws: ExportError.destinationNotADirectory(path: file.path)) {
-            try export(ExportFixture.meeting, as: .markdown, to: file)
+            try write(ExportFixture.meeting, as: .markdown, to: file.appendingPathComponent("t.md"))
         }
     }
 
@@ -228,18 +164,26 @@ struct ExportExporterTests {
     func formatMetadata() {
         #expect(ExportFormat.markdown.fileExtension == "md")
         #expect(ExportFormat.plainText.fileExtension == "txt")
-        #expect(ExportFormat.word.fileExtension == "docx")
-        #expect(ExportFormat.word.uniformTypeIdentifier == "org.openxmlformats.wordprocessingml.document")
-        #expect(ExportFormat.allCases.count == 3)
+        #expect(ExportFormat.markdown.uniformTypeIdentifier == "net.daringfireball.markdown")
+        #expect(ExportFormat.plainText.uniformTypeIdentifier == "public.plain-text")
+        #expect(ExportFormat.allCases.count == 2)
     }
 
-    /// The default export format is persisted in settings, so the raw values
-    /// are a stored format that must not drift.
-    @Test("raw values are stable, because settings persist them")
+    /// Word is gone: `.docx` is a document you send, and regenerating one on
+    /// every keystroke to sit unread in a project folder was not that.
+    @Test("Word is no longer a format")
+    func wordIsGone() {
+        #expect(ExportFormat(rawValue: "word") == nil)
+        #expect(!ExportFormat.allCases.contains { $0.fileExtension == "docx" })
+    }
+
+    /// Earlier versions persisted the chosen format in UserDefaults, so these
+    /// raw values reached users' disks and must keep decoding.
+    @Test("raw values are stable, because settings persisted them")
     func rawValuesAreStable() {
         #expect(ExportFormat.markdown.rawValue == "markdown")
         #expect(ExportFormat.plainText.rawValue == "plainText")
-        #expect(ExportFormat.word.rawValue == "word")
-        #expect(ExportFormat(rawValue: "word") == .word)
+        #expect(ExportFormat(rawValue: "markdown") == .markdown)
+        #expect(ExportFormat(rawValue: "plainText") == .plainText)
     }
 }

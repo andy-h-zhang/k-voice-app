@@ -37,7 +37,7 @@ struct StorageImportTests {
 
         #expect(folder.baseName == "Team Sync")
         #expect(folder.folderURL == root.appendingPathComponent("Team Sync", isDirectory: true))
-        #expect(folder.audioURL == folder.folderURL.appendingPathComponent("Team Sync.m4a"))
+        #expect(folder.audioURL == folder.folderURL.appendingPathComponent("Team Sync Recording.m4a"))
         #expect(FileManager.default.fileExists(atPath: folder.audioURL.path))
     }
 

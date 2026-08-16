@@ -21,8 +21,6 @@ public struct SettingsSnapshot: Sendable, Equatable {
     /// time, so a settings list is never silently truncated on save.
     public var keyterms: [String]
 
-    public var defaultExportFormat: ExportFormat
-
     /// CoreAudio device UID of the chosen input, or nil for the system default.
     public var inputDeviceUID: String?
 
@@ -36,14 +34,12 @@ public struct SettingsSnapshot: Sendable, Equatable {
         storageFolderURL: URL,
         similarityThreshold: Float,
         keyterms: [String],
-        defaultExportFormat: ExportFormat,
         inputDeviceUID: String?,
         speechModelPreference: SpeechModelPreference = .default
     ) {
         self.storageFolderURL = storageFolderURL
         self.similarityThreshold = similarityThreshold
         self.keyterms = keyterms
-        self.defaultExportFormat = defaultExportFormat
         self.inputDeviceUID = inputDeviceUID
         self.speechModelPreference = speechModelPreference
     }
@@ -66,7 +62,9 @@ public final class SettingsStore: @unchecked Sendable {
         public static let storageFolderPath = "kvoice.settings.storageFolderPath"
         public static let similarityThreshold = "kvoice.settings.similarityThreshold"
         public static let keyterms = "kvoice.settings.keyterms"
-        public static let defaultExportFormat = "kvoice.settings.defaultExportFormat"
+        /// Which storage layout the library on disk is in. Absent means the
+        /// pre-project layout, whatever the app version.
+        public static let libraryLayoutVersion = "kvoice.settings.libraryLayoutVersion"
         public static let inputDeviceUID = "kvoice.settings.inputDeviceUID"
         public static let speechModelPreference = "kvoice.settings.speechModelPreference"
     }
@@ -99,7 +97,7 @@ public final class SettingsStore: @unchecked Sendable {
     public func removeAll() {
         for key in [
             Key.storageFolderPath, Key.similarityThreshold, Key.keyterms,
-            Key.defaultExportFormat, Key.inputDeviceUID, Key.speechModelPreference
+            Key.libraryLayoutVersion, Key.inputDeviceUID, Key.speechModelPreference
         ] {
             defaults.removeObject(forKey: key)
         }
@@ -149,16 +147,24 @@ public final class SettingsStore: @unchecked Sendable {
         }
     }
 
-    /// Default export format. Unset (or unrecognized) means Markdown.
-    public var defaultExportFormat: ExportFormat {
-        get {
-            guard let raw = defaults.string(forKey: Key.defaultExportFormat),
-                let format = ExportFormat(rawValue: raw)
-            else { return .markdown }
-            return format
-        }
-        set { defaults.set(newValue.rawValue, forKey: Key.defaultExportFormat) }
+    /// Which storage layout the library on disk is in.
+    ///
+    /// `0` — and therefore any library written before this key existed — means
+    /// the pre-project layout: audio named exactly after its folder, rendered
+    /// transcripts in a shared `Transcripts/`. `1` means every recording is a
+    /// self-contained project folder. ``LibraryMigration`` is what moves a
+    /// library from one to the other, and this is the flag that stops it
+    /// walking the whole library on every launch forever after.
+    ///
+    /// A version rather than a `didMigrate` bool so the next layout change has
+    /// somewhere to go.
+    public var libraryLayoutVersion: Int {
+        get { defaults.integer(forKey: Key.libraryLayoutVersion) }
+        set { defaults.set(newValue, forKey: Key.libraryLayoutVersion) }
     }
+
+    /// The layout this build writes.
+    public static let currentLibraryLayoutVersion = 1
 
     /// CoreAudio UID of the selected input device; nil means system default.
     public var inputDeviceUID: String? {
@@ -195,7 +201,6 @@ public final class SettingsStore: @unchecked Sendable {
             storageFolderURL: storageFolderURL,
             similarityThreshold: similarityThreshold,
             keyterms: keyterms,
-            defaultExportFormat: defaultExportFormat,
             inputDeviceUID: inputDeviceUID,
             speechModelPreference: speechModelPreference
         )
@@ -206,7 +211,6 @@ public final class SettingsStore: @unchecked Sendable {
         storageFolderURL = snapshot.storageFolderURL
         similarityThreshold = snapshot.similarityThreshold
         keyterms = snapshot.keyterms
-        defaultExportFormat = snapshot.defaultExportFormat
         inputDeviceUID = snapshot.inputDeviceUID
     }
 

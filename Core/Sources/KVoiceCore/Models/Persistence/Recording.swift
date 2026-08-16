@@ -141,14 +141,17 @@ public final class Recording {
     }
 
     /// Where this recording's files live, given the (configurable) library root.
+    ///
+    /// The base name is the *folder's* name, not the audio file's stem: files
+    /// inside are `<base> Recording.m4a` and `<base> Transcript.md`, so the
+    /// stem and the base name are no longer the same string. The audio file
+    /// name is passed through verbatim, which is what keeps a pre-migration
+    /// row — whose audio really is `<base>.m4a` — resolving to its own file.
     public func folder(inRoot root: URL) -> RecordingFolder {
-        let folderURL = root.appendingPathComponent(folderName, isDirectory: true)
-        let base = (audioFileName as NSString).deletingPathExtension
-        let ext = (audioFileName as NSString).pathExtension
-        return RecordingFolder(
-            folderURL: folderURL,
-            baseName: base.isEmpty ? folderName : base,
-            audioFileExtension: ext.isEmpty ? "m4a" : ext
+        RecordingFolder(
+            folderURL: root.appendingPathComponent(folderName, isDirectory: true),
+            baseName: folderName,
+            audioFileName: audioFileName
         )
     }
 

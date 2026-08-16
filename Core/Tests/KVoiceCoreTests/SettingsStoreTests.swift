@@ -36,7 +36,7 @@ struct SettingsStoreTests {
         #expect(suite.store.storageFolderURL == suite.defaultRoot)
         #expect(suite.store.similarityThreshold == ClusterMatcher.defaultThreshold)
         #expect(suite.store.keyterms.isEmpty)
-        #expect(suite.store.defaultExportFormat == .markdown)
+        #expect(suite.store.libraryLayoutVersion == 0)
         #expect(suite.store.inputDeviceUID == nil)
     }
 
@@ -54,13 +54,13 @@ struct SettingsStoreTests {
         suite.store.storageFolderURL = folder
         suite.store.similarityThreshold = 0.71
         suite.store.keyterms = ["Kizaki", "KVoice"]
-        suite.store.defaultExportFormat = .word
+        suite.store.libraryLayoutVersion = 1
         suite.store.inputDeviceUID = "AppleUSBAudioEngine:Blue:Yeti"
 
         #expect(suite.store.storageFolderURL.path == folder.path)
         #expect(abs(suite.store.similarityThreshold - 0.71) < 1e-6)
         #expect(suite.store.keyterms == ["Kizaki", "KVoice"])
-        #expect(suite.store.defaultExportFormat == .word)
+        #expect(suite.store.libraryLayoutVersion == 1)
         #expect(suite.store.inputDeviceUID == "AppleUSBAudioEngine:Blue:Yeti")
 
         // A second store over the same suite reads the same values, which is
@@ -149,27 +149,21 @@ struct SettingsStoreTests {
         #expect(suite.store.inputDeviceUID == nil)
     }
 
-    @Test("every export format survives the UserDefaults round-trip")
-    func exportFormatPersistence() {
-        // `Export/ExportFormat.swift` documents that its raw values are
-        // persisted and must not change; this is the path that persists them.
+    /// The flag that decides whether ``LibraryMigration`` walks the library on
+    /// launch. A library written before the key existed reads `0`, which is
+    /// exactly right: it has not been migrated.
+    @Test("the layout version round-trips, and defaults to unmigrated")
+    func layoutVersionPersistence() {
         let suite = SettingsSuite()
         defer { suite.cleanUp() }
 
-        for format in ExportFormat.allCases {
-            suite.store.defaultExportFormat = format
-            #expect(suite.store.defaultExportFormat == format)
-            #expect(suite.defaults.string(forKey: SettingsStore.Key.defaultExportFormat) == format.rawValue)
-        }
-    }
+        #expect(suite.store.libraryLayoutVersion == 0)
 
-    @Test("an unrecognized export format decodes as Markdown")
-    func unknownExportFormat() {
-        let suite = SettingsSuite()
-        defer { suite.cleanUp() }
+        suite.store.libraryLayoutVersion = SettingsStore.currentLibraryLayoutVersion
+        #expect(suite.store.libraryLayoutVersion == 1)
 
-        suite.defaults.set("pdf-from-the-future", forKey: SettingsStore.Key.defaultExportFormat)
-        #expect(suite.store.defaultExportFormat == .markdown)
+        let reader = SettingsStore(defaults: suite.defaults, defaultStorageFolderURL: suite.defaultRoot)
+        #expect(reader.libraryLayoutVersion == 1)
     }
 
     @Test("a snapshot applies wholesale onto another suite")
@@ -184,7 +178,6 @@ struct SettingsStoreTests {
         source.store.storageFolderURL = URL(fileURLWithPath: "/tmp/Recordings", isDirectory: true)
         source.store.similarityThreshold = 0.55
         source.store.keyterms = ["Kizaki"]
-        source.store.defaultExportFormat = .plainText
         source.store.inputDeviceUID = "device-9"
 
         destination.store.apply(source.store.snapshot())

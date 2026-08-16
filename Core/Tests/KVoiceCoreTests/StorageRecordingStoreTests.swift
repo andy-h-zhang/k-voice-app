@@ -18,7 +18,7 @@ struct StorageRecordingStoreTests {
 
             #expect(folder.baseName == "2026-08-13 Standup")
             #expect(folder.folderURL == root.appendingPathComponent("2026-08-13 Standup", isDirectory: true))
-            #expect(folder.audioURL.lastPathComponent == "2026-08-13 Standup.m4a")
+            #expect(folder.audioURL.lastPathComponent == "2026-08-13 Standup Recording.m4a")
             #expect(folder.audioURL.deletingLastPathComponent().path == folder.folderURL.path)
             #expect(isDirectory(folder.folderURL))
         }
@@ -31,9 +31,11 @@ struct StorageRecordingStoreTests {
             let folder = try store.createRecording(title: "Standup")
 
             #expect(folder.folderURL.lastPathComponent == folder.baseName)
-            #expect(folder.audioURL.lastPathComponent == "\(folder.baseName).m4a")
-            #expect(folder.fileURL(withExtension: "md").lastPathComponent == "\(folder.baseName).md")
-            #expect(folder.fileURL(withExtension: "docx").lastPathComponent == "\(folder.baseName).docx")
+            #expect(folder.audioURL.lastPathComponent == "\(folder.baseName) Recording.m4a")
+            #expect(folder.transcriptURL(.markdown).lastPathComponent
+                == "\(folder.baseName) Transcript.md")
+            #expect(folder.transcriptURL(.plainText).lastPathComponent
+                == "\(folder.baseName) Transcript.txt")
         }
     }
 
@@ -90,7 +92,7 @@ struct StorageRecordingStoreTests {
 
             for folder in [first, second, third] {
                 #expect(isDirectory(folder.folderURL))
-                #expect(folder.audioURL.lastPathComponent == "\(folder.baseName).m4a")
+                #expect(folder.audioURL.lastPathComponent == "\(folder.baseName) Recording.m4a")
             }
         }
     }
@@ -148,9 +150,8 @@ struct StorageRecordingStoreTests {
             let folder = try store.createRecording(title: "Standup")
 
             try writeSilentFile(at: folder.audioURL, extension: "m4a")
-            try Data("# notes".utf8).write(to: folder.fileURL(withExtension: "md"))
-            try Data("notes".utf8).write(to: folder.fileURL(withExtension: "txt"))
-            try Data("PK".utf8).write(to: folder.fileURL(withExtension: "docx"))
+            try Data("# notes".utf8).write(to: folder.transcriptURL(.markdown))
+            try Data("notes".utf8).write(to: folder.transcriptURL(.plainText))
 
             let renamed = try store.rename(folder, to: "Weekly Sync")
 
@@ -159,11 +160,14 @@ struct StorageRecordingStoreTests {
             #expect(!exists(folder.folderURL))
             #expect(isDirectory(renamed.folderURL))
 
-            for pathExtension in ["m4a", "md", "txt", "docx"] {
-                #expect(exists(renamed.fileURL(withExtension: pathExtension)))
+            #expect(exists(renamed.audioURL))
+            for format in ExportFormat.allCases {
+                #expect(exists(renamed.transcriptURL(format)))
             }
             #expect(contents(of: renamed.folderURL).sorted() == [
-                "Weekly Sync.docx", "Weekly Sync.m4a", "Weekly Sync.md", "Weekly Sync.txt"
+                "Weekly Sync Recording.m4a",
+                "Weekly Sync Transcript.md",
+                "Weekly Sync Transcript.txt",
             ])
         }
     }
@@ -183,7 +187,8 @@ struct StorageRecordingStoreTests {
             let renamed = try store.rename(folder, to: "Weekly Sync")
 
             #expect(exists(renamed.folderURL.appendingPathComponent("transcript.raw.json")))
-            #expect(contents(of: renamed.folderURL).sorted() == ["Weekly Sync.m4a", "transcript.raw.json"])
+            #expect(contents(of: renamed.folderURL).sorted()
+                == ["Weekly Sync Recording.m4a", "transcript.raw.json"])
         }
     }
 
@@ -278,7 +283,7 @@ struct StorageRecordingStoreTests {
 
             let folder = try store.createRecording(title: "Standup")
             try writeSilentFile(at: folder.audioURL, extension: "m4a")
-            try Data("# notes".utf8).write(to: folder.fileURL(withExtension: "md"))
+            try Data("# notes".utf8).write(to: folder.transcriptURL(.markdown))
             try Data("{}".utf8).write(to: folder.folderURL.appendingPathComponent("transcript.raw.json"))
 
             var thrown: StorageError?
@@ -301,7 +306,7 @@ struct StorageRecordingStoreTests {
             #expect(isDirectory(folder.folderURL))
             #expect(!exists(root.appendingPathComponent("Weekly Sync")))
             #expect(contents(of: folder.folderURL).sorted() == [
-                "Standup.m4a", "Standup.md", "transcript.raw.json"
+                "Standup Recording.m4a", "Standup Transcript.md", "transcript.raw.json"
             ])
         }
     }
@@ -314,13 +319,14 @@ struct StorageRecordingStoreTests {
 
             let folder = try store.createRecording(title: "Standup")
             try writeSilentFile(at: folder.audioURL, extension: "m4a")
-            try Data("# notes".utf8).write(to: folder.fileURL(withExtension: "md"))
+            try Data("# notes".utf8).write(to: folder.transcriptURL(.markdown))
 
             #expect(throws: StorageError.self) {
                 _ = try store.rename(folder, to: "Weekly Sync")
             }
 
-            #expect(contents(of: folder.folderURL).sorted() == ["Standup.m4a", "Standup.md"])
+            #expect(contents(of: folder.folderURL).sorted()
+                == ["Standup Recording.m4a", "Standup Transcript.md"])
         }
     }
 
@@ -336,7 +342,7 @@ struct StorageRecordingStoreTests {
 
             let folder = try store.createRecording(title: "Standup")
             try writeSilentFile(at: folder.audioURL, extension: "m4a")
-            try Data("# notes".utf8).write(to: folder.fileURL(withExtension: "md"))
+            try Data("# notes".utf8).write(to: folder.transcriptURL(.markdown))
 
             var thrown: StorageError?
             do {
@@ -363,7 +369,7 @@ struct StorageRecordingStoreTests {
 
             let folder = try store.createRecording(title: "Standup")
             try writeSilentFile(at: folder.audioURL, extension: "m4a")
-            try Data("# notes".utf8).write(to: folder.fileURL(withExtension: "md"))
+            try Data("# notes".utf8).write(to: folder.transcriptURL(.markdown))
 
             #expect(throws: StorageError.self) {
                 _ = try store.rename(folder, to: "Weekly Sync")
@@ -434,286 +440,6 @@ struct StorageRecordingStoreTests {
 }
 
 // MARK: - Transcripts folder
-
-/// The shared `<root>/Transcripts` folder: where every rendered export lands,
-/// and the second half of a rename's transaction.
-///
-/// The interesting property is not "the files move" — it is that they move
-/// *with the same rollback discipline as the recording folder*, because
-/// `Transcripts/` is shared. An export orphaned under the old title in a folder
-/// full of other recordings' transcripts is unrecoverable by inspection.
-@Suite("Storage transcripts folder")
-struct StorageTranscriptsFolderTests {
-
-    // MARK: - Location and lazy creation
-
-    @Test("the transcripts folder is a reserved sibling of the recording folders")
-    func transcriptsFolderIsAtTheRoot() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-
-            #expect(store.transcriptsFolderURL == root.appendingPathComponent("Transcripts", isDirectory: true))
-            #expect(RecordingStore.transcriptsFolderName == "Transcripts")
-            #expect(RecordingStore.transcriptsFolderURL(inLibraryRoot: root) == store.transcriptsFolderURL)
-        }
-    }
-
-    @Test("nothing creates the transcripts folder until something needs it")
-    func transcriptsFolderIsLazy() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            try store.createRootIfNeeded()
-            _ = try store.createRecording(title: "Standup")
-
-            #expect(!exists(store.transcriptsFolderURL))
-
-            let created = try store.createTranscriptsFolderIfNeeded()
-            #expect(isDirectory(created))
-            #expect(created == store.transcriptsFolderURL)
-
-            // Idempotent: the second call is not an error and does not replace
-            // anything already inside.
-            try Data("# notes".utf8).write(to: created.appendingPathComponent("Standup.md"))
-            _ = try store.createTranscriptsFolderIfNeeded()
-            #expect(exists(created.appendingPathComponent("Standup.md")))
-        }
-    }
-
-    @Test("a file where the transcripts folder should be is an error, not a crash")
-    func transcriptsFolderBlockedByAFile() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            try store.createRootIfNeeded()
-            try Data("not a folder".utf8).write(to: store.transcriptsFolderURL)
-
-            #expect(throws: StorageError.notADirectory(path: store.transcriptsFolderURL.path)) {
-                _ = try store.createTranscriptsFolderIfNeeded()
-            }
-        }
-    }
-
-    @Test("the transcripts folder is never listed as a recording")
-    func listingSkipsTheTranscriptsFolder() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let folder = try store.createRecording(title: "Standup")
-            try writeSilentFile(at: folder.audioURL, extension: "m4a")
-
-            // Even with an audio file in it — a user could drag one in.
-            let transcripts = try store.createTranscriptsFolderIfNeeded()
-            try Data("# notes".utf8).write(to: transcripts.appendingPathComponent("Standup.md"))
-            try writeSilentFile(at: transcripts.appendingPathComponent("stray.m4a"), extension: "m4a")
-
-            let found = try store.recordings()
-            #expect(found.map(\.baseName) == ["Standup"])
-        }
-    }
-
-    // MARK: - Looking exports up
-
-    @Test("exports are found by base name, and only by base name")
-    func findsExportsByBaseName() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let transcripts = try store.createTranscriptsFolderIfNeeded()
-
-            for name in ["Standup.md", "Standup.txt", "Standup.docx", "Standup 2.md", "Standup Notes.md", "Retro.md"] {
-                try Data("x".utf8).write(to: transcripts.appendingPathComponent(name))
-            }
-
-            // The match is on "<base>." — "Standup 2" and "Standup Notes" are
-            // different recordings, not extensions of this one.
-            let standup = try store.transcriptExports(forBaseName: "Standup").map(\.lastPathComponent)
-            let suffixed = try store.transcriptExports(forBaseName: "Standup 2").map(\.lastPathComponent)
-            let missing = try store.transcriptExports(forBaseName: "Nothing")
-
-            #expect(standup == ["Standup.docx", "Standup.md", "Standup.txt"])
-            #expect(suffixed == ["Standup 2.md"])
-            #expect(missing.isEmpty)
-        }
-    }
-
-    @Test("looking for exports before the folder exists is empty, not an error")
-    func findsNoExportsWithoutAFolder() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let found = try store.transcriptExports(forBaseName: "Standup")
-            #expect(found.isEmpty)
-        }
-    }
-
-    // MARK: - Rename
-
-    @Test("renaming carries the recording's exports across, in every format")
-    func renameMovesTranscriptExports() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let folder = try store.createRecording(title: "Standup")
-            try writeSilentFile(at: folder.audioURL, extension: "m4a")
-
-            let transcripts = try store.createTranscriptsFolderIfNeeded()
-            for name in ["Standup.md", "Standup.txt", "Standup.docx"] {
-                try Data("x".utf8).write(to: transcripts.appendingPathComponent(name))
-            }
-
-            let renamed = try store.rename(folder, to: "Weekly Sync")
-
-            #expect(renamed.baseName == "Weekly Sync")
-            #expect(contents(of: transcripts).sorted() == [
-                "Weekly Sync.docx", "Weekly Sync.md", "Weekly Sync.txt"
-            ])
-        }
-    }
-
-    @Test("renaming leaves other recordings' exports alone")
-    func renameLeavesOtherExportsAlone() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let folder = try store.createRecording(title: "Standup")
-            try writeSilentFile(at: folder.audioURL, extension: "m4a")
-
-            let transcripts = try store.createTranscriptsFolderIfNeeded()
-            try Data("mine".utf8).write(to: transcripts.appendingPathComponent("Standup.md"))
-            try Data("theirs".utf8).write(to: transcripts.appendingPathComponent("Retro.md"))
-            try Data("theirs".utf8).write(to: transcripts.appendingPathComponent("Standup Notes.md"))
-
-            _ = try store.rename(folder, to: "Weekly Sync")
-
-            #expect(contents(of: transcripts).sorted() == [
-                "Retro.md", "Standup Notes.md", "Weekly Sync.md"
-            ])
-        }
-    }
-
-    @Test("a recording with no exports renames without conjuring the folder")
-    func renameWithoutExportsStaysLazy() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let folder = try store.createRecording(title: "Standup")
-            try writeSilentFile(at: folder.audioURL, extension: "m4a")
-
-            let renamed = try store.rename(folder, to: "Weekly Sync")
-
-            #expect(renamed.baseName == "Weekly Sync")
-            #expect(!exists(store.transcriptsFolderURL))
-        }
-    }
-
-    /// The shared folder makes a new class of collision possible: two
-    /// recordings can want one filename even when their folders do not clash.
-    @Test("renaming onto another recording's export name takes the next suffix")
-    func renameAvoidsCollidingWithAnotherRecordingsExports() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let folder = try store.createRecording(title: "Standup")
-            try writeSilentFile(at: folder.audioURL, extension: "m4a")
-
-            // "Weekly Sync" has been exported by a recording whose own folder
-            // was since deleted — so the folder-name probe alone would miss it.
-            let transcripts = try store.createTranscriptsFolderIfNeeded()
-            try Data("someone else".utf8).write(to: transcripts.appendingPathComponent("Weekly Sync.md"))
-
-            let renamed = try store.rename(folder, to: "Weekly Sync")
-
-            #expect(renamed.baseName == "Weekly Sync 2")
-            #expect(contents(of: transcripts).sorted() == ["Weekly Sync.md"])
-
-            // Untouched, not overwritten.
-            let kept = try Data(contentsOf: transcripts.appendingPathComponent("Weekly Sync.md"))
-            #expect(String(decoding: kept, as: UTF8.self) == "someone else")
-        }
-    }
-
-    @Test("renaming to the same title leaves the exports untouched")
-    func renameToSameTitleLeavesExportsAlone() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let folder = try store.createRecording(title: "Standup")
-            try writeSilentFile(at: folder.audioURL, extension: "m4a")
-
-            let transcripts = try store.createTranscriptsFolderIfNeeded()
-            try Data("x".utf8).write(to: transcripts.appendingPathComponent("Standup.md"))
-
-            let renamed = try store.rename(folder, to: "Standup")
-
-            #expect(renamed == folder)
-            #expect(contents(of: transcripts) == ["Standup.md"])
-        }
-    }
-
-    // MARK: - Rollback
-
-    /// The export move is now the *last* step, which makes it the one that can
-    /// leave a fully renamed recording behind if it is not part of the
-    /// transaction. It is: the folder move joins `completed` too, and unwinds.
-    @Test("a failure moving an export rolls the folder and the audio back")
-    func rollsBackWhenAnExportMoveFails() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let folder = try store.createRecording(title: "Standup")
-            try writeSilentFile(at: folder.audioURL, extension: "m4a")
-            let transcripts = try store.createTranscriptsFolderIfNeeded()
-            try Data("x".utf8).write(to: transcripts.appendingPathComponent("Standup.md"))
-
-            // Moves are: 1) Standup.m4a  2) the folder  3) Transcripts/Standup.md.
-            let operations = FailingFileOperations(failingMoveIndices: [3])
-            let failing = RecordingStore(rootURL: root, operations: operations)
-
-            var thrown: StorageError?
-            do {
-                _ = try failing.rename(folder, to: "Weekly Sync")
-            } catch let error as StorageError {
-                thrown = error
-            }
-
-            let error = try #require(thrown)
-            guard case .renameFailed(let from, let to, _, let rolledBack) = error else {
-                Issue.record("expected renameFailed, got \(error)")
-                return
-            }
-            #expect(from == "Standup")
-            #expect(to == "Weekly Sync")
-            #expect(rolledBack)
-
-            // Disk is exactly as it was before the attempt — folder name,
-            // audio name, and the export.
-            #expect(isDirectory(folder.folderURL))
-            #expect(!exists(root.appendingPathComponent("Weekly Sync")))
-            #expect(contents(of: folder.folderURL) == ["Standup.m4a"])
-            #expect(contents(of: transcripts) == ["Standup.md"])
-        }
-    }
-
-    @Test("an export that would overwrite an existing file fails the whole rename")
-    func exportCollisionFailsTheRename() throws {
-        try withTemporaryDirectory { root in
-            let store = RecordingStore(rootURL: root)
-            let folder = try store.createRecording(title: "Standup")
-            try writeSilentFile(at: folder.audioURL, extension: "m4a")
-
-            let transcripts = try store.createTranscriptsFolderIfNeeded()
-            try Data("mine".utf8).write(to: transcripts.appendingPathComponent("Standup.md"))
-            // A `.txt` under the target name that the uniqueness probe cannot
-            // see, because it lands there between the probe and the move.
-            try Data("theirs".utf8).write(to: transcripts.appendingPathComponent("Weekly Sync.txt"))
-
-            // The probe suffixes to "Weekly Sync 2" precisely to avoid this,
-            // so provoke the raw collision by renaming onto the suffixed name
-            // after seeding it.
-            try Data("theirs".utf8).write(to: transcripts.appendingPathComponent("Weekly Sync 2.md"))
-
-            let renamed = try store.rename(folder, to: "Weekly Sync")
-
-            // Both candidate names were taken, so it went to the next free one
-            // rather than overwriting anyone.
-            #expect(renamed.baseName == "Weekly Sync 3")
-            #expect(contents(of: transcripts).sorted() == [
-                "Weekly Sync 2.md", "Weekly Sync 3.md", "Weekly Sync.txt"
-            ])
-        }
-    }
-}
-
 // MARK: - Helpers
 
 /// Runs `body` with a fresh temporary directory that is removed afterwards.
