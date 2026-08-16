@@ -27,7 +27,6 @@ struct AppSettingsView: View {
             AudioSection()
             SpeakerMatchingSection()
             KeytermsSection()
-            ExportSection()
         }
         .formStyle(.grouped)
         // A reading column, not a fixed panel. Both of the frames that used to
@@ -488,37 +487,6 @@ private struct KeytermsSection: View {
             )
             .font(.callout)
             .foregroundStyle(.secondary)
-        }
-    }
-}
-
-// MARK: - Export
-
-private struct ExportSection: View {
-
-    @Environment(AppServices.self) private var services
-
-    private var format: Binding<ExportFormat> {
-        Binding(
-            get: { services.appSettings.defaultExportFormat },
-            set: { services.appSettings.setDefaultExportFormat($0) }
-        )
-    }
-
-    var body: some View {
-        Section {
-            Picker("Default format", selection: format) {
-                ForEach(ExportFormat.allCases, id: \.self) { format in
-                    Text("\(format.displayName) (.\(format.fileExtension))")
-                        .tag(format)
-                }
-            }
-        } header: {
-            Text("Export")
-        } footer: {
-            Text("What the one-click export button produces. Every format stays available per recording.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 }

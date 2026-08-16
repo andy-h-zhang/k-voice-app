@@ -86,15 +86,12 @@ struct KVoiceApp: App {
             // user looks for "where is this saved", and it works from any
             // section, including the record screen.
             CommandGroup(replacing: .newItem) {
+                // One item, not two. There is no transcripts folder to open
+                // any more — every transcript sits in its recording's own
+                // folder, so the library root is the only place to point at.
                 Button("Show Recordings in Finder") {
                     guard let libraryRoot else { return }
                     FinderIntegration.open(libraryRoot)
-                }
-                .disabled(libraryRoot == nil)
-
-                Button("Show Transcripts in Finder") {
-                    guard let libraryRoot else { return }
-                    FinderIntegration.openTranscriptsFolder(inLibraryRoot: libraryRoot)
                 }
                 .disabled(libraryRoot == nil)
             }

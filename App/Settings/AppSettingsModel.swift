@@ -48,7 +48,6 @@ final class AppSettingsModel {
     // becomes visible).
 
     private(set) var similarityThreshold: Float
-    private(set) var defaultExportFormat: ExportFormat
     private(set) var inputChoice: InputChoice
     private(set) var libraryRoot: URL
     private(set) var speechModelPreference: SpeechModelPreference
@@ -88,7 +87,6 @@ final class AppSettingsModel {
         self.store = store
         self.keytermsText = settings.keyterms.joined(separator: "\n")
         self.similarityThreshold = settings.similarityThreshold
-        self.defaultExportFormat = settings.defaultExportFormat
         self.inputChoice = settings.inputDeviceUID.map { .device(uid: $0) } ?? .systemDefault
         self.libraryRoot = settings.storageFolderURL
         self.speechModelPreference = settings.speechModelPreference
@@ -219,13 +217,6 @@ final class AppSettingsModel {
 
     func resetThreshold() {
         setSimilarityThreshold(ClusterMatcher.defaultThreshold)
-    }
-
-    // MARK: - Export
-
-    func setDefaultExportFormat(_ format: ExportFormat) {
-        settings.defaultExportFormat = format
-        defaultExportFormat = format
     }
 
     // MARK: - Keyterms

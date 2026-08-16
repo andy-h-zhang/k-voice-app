@@ -87,9 +87,9 @@ struct PreviewFixture {
             }
 
         let recording = Recording(
-            title: "Weekly sync",
-            folderName: "2026-08-13 Weekly sync",
-            audioFileName: "audio.m4a",
+            title: "2026-08-13 Weekly Sync",
+            folderName: "2026-08-13 Weekly Sync",
+            audioFileName: "2026-08-13 Weekly Sync Recording.m4a",
             createdAt: createdAt,
             durationSec: 372,
             status: status

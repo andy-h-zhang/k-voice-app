@@ -45,8 +45,8 @@ make generate && open KVoice.xcodeproj
 `App/Support/PreviewSupport.swift` supplies `PreviewFixture`, a whole
 `AppServices` over a **temporary** library folder and an in-memory API key,
 seeded with a fake transcript — two named speakers, one unnamed, six turns. The
-services and models are the real ones, so speaker assignment, editing, export
-and copy all genuinely work in the canvas. `TranscriptEditorView.swift` ends
+services and models are the real ones, so speaker assignment, editing and copy
+all genuinely work in the canvas. `TranscriptEditorView.swift` ends
 with four previews covering the states that are otherwise expensive to reach:
 `Transcript`, `No Transcript Yet`, `Transcription Failed`, and `No API Key`.
 
@@ -166,23 +166,36 @@ entitlements). `--deep` is used only for verification.
 ## Where files live
 
 The library is plain folders, not a bundle — everything is grabbable in Finder,
-and the app's **File** menu points at both halves of it:
+and the app's **File** menu points at it:
 
 ```
-~/Documents/KVoice/                 # configurable in Settings → Storage
-├── 2026-08-13 Standup/             # one folder per recording
-│   ├── 2026-08-13 Standup.m4a
-│   └── transcript.raw.json         # verbatim provider response
-├── Transcripts/                    # every rendered export, created on demand
-│   └── 2026-08-13 Standup.md
-└── KVoice.store                    # the SwiftData database
+~/Documents/KVoice/                          # configurable in Settings → Storage
+├── 2026-08-13 Weekly Sync/                  # one folder per recording
+│   ├── 2026-08-13 Weekly Sync Recording.m4a
+│   ├── 2026-08-13 Weekly Sync Transcript.md
+│   ├── 2026-08-13 Weekly Sync Transcript.txt
+│   └── transcript.raw.json                  # verbatim provider response
+└── KVoice.store                             # the SwiftData database
 ```
 
-Rendered exports (`.md`, `.txt`, `.docx`) share one `Transcripts/` folder rather
-than sitting inside each recording's folder, so there is a single place to look
-for readable transcripts. Renaming a recording renames its exports there too;
-deleting one trashes them with it. A backup of the root is a backup of
-everything.
+A recording is a **project folder**: the audio and both rendered transcripts
+under one name, so it is a single thing to drag, copy, back up or send. Folders
+are named `YYYY-MM-DD [NAME]`, with the date filled in from your machine's time
+zone when you stop recording; the name is whatever you type next.
+
+Both transcripts are written the moment transcription finishes and rewritten
+whenever you edit a paragraph or rename a speaker, so what is on disk always
+matches what the app shows. There is no export step and no format setting —
+Markdown for reading, plain text for everything that does not understand it.
+
+Renaming a recording renames its folder and every file inside it; deleting one
+trashes the lot. A backup of the root is a backup of everything.
+
+Earlier versions kept rendered exports in a shared `Transcripts/` folder and
+offered Word output. A library in that layout is migrated on first launch:
+folders lose their clock time and trailing "Recording", audio gains its role
+suffix, and exports come home. It never deletes — an existing `.docx` is moved
+into its project folder and left alone.
 
 ## AssemblyAI API key
 
@@ -225,9 +238,9 @@ First real-model use downloads FluidAudio's CoreML models (~100 MB, cached in `~
 
 ## Status
 
-Phases 0–7 of [docs/implementation-plan.md](docs/implementation-plan.md) are complete and merged: recording, transcription, speaker ID with auto-learn, persistence, the full app (record / library / editor / people / settings), exports, and the CLI harness. **603 offline tests in 64 suites** (`make test`), zero warnings from our own code in `make build`, `make app-build`, and `make release`.
+Phases 0–7 of [docs/implementation-plan.md](docs/implementation-plan.md) are complete and merged: recording, transcription, speaker ID with auto-learn, persistence, the full app (record / library / editor / people / settings), per-project transcripts, and the CLI harness. **562 offline tests in 63 suites** (`make test`), zero warnings from our own code in `make build`, `make app-build`, and `make release`.
 
 What is left is the part that needs a person, not a test:
 
-- **[docs/acceptance-checklist.md](docs/acceptance-checklist.md)** — the single ~30-minute walkthrough that closes Phase 8. It merges the spec's acceptance criteria with the visual checks accumulated across every phase: first-run with no key, mic permission, the recording flow, Finder parity, Settings, enrollment, the full transcribe pipeline, the editor's speaker operations, exports in Word and Google Docs, and the 60-minute and three-voice acceptance recordings.
+- **[docs/acceptance-checklist.md](docs/acceptance-checklist.md)** — the single ~30-minute walkthrough that closes Phase 8. It merges the spec's acceptance criteria with the visual checks accumulated across every phase: first-run with no key, mic permission, the recording flow, Finder parity, Settings, enrollment, the full transcribe pipeline, the editor's speaker operations, the transcripts written into each project folder, and the 60-minute and three-voice acceptance recordings.
 - **Speaker-ID accuracy validation** (implementation plan Phase 1b) still needs real audio: an AssemblyAI API key, a 60-minute two-person recording, and a three-voice recording. `speakerlab eval` on a labeled corpus confirms or moves the shipped 0.62 threshold — the last item on the checklist.

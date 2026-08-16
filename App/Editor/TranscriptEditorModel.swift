@@ -214,6 +214,17 @@ final class TranscriptEditorModel {
         folderURL.appendingPathComponent(audioFileName)
     }
 
+    /// This recording's transcript file in `format`, whether or not it has been
+    /// written yet.
+    func transcriptURL(_ format: ExportFormat) -> URL {
+        RecordingFolder(folderURL: folderURL, baseName: folderName, audioFileName: audioFileName)
+            .transcriptURL(format)
+    }
+
+    func transcriptFileName(_ format: ExportFormat) -> String {
+        transcriptURL(format).lastPathComponent
+    }
+
     @ObservationIgnored private var folderName: String = ""
     @ObservationIgnored private var audioFileName: String = ""
 
@@ -287,6 +298,12 @@ final class TranscriptEditorModel {
         debounce = nil
         pendingEdits.removeAll()
         reload()
+
+        // A transcript that just landed has no files on disk yet — this is the
+        // moment they first get written. Immediate rather than debounced:
+        // nothing else is coming, and a user who switches to Finder the second
+        // the job finishes should find the folder complete.
+        if !isEmpty { syncTranscriptFiles() }
     }
 
     /// Re-reads the profile library, for the assignment pickers.
@@ -449,7 +466,10 @@ final class TranscriptEditorModel {
                 }
             }
 
-            if context.hasChanges { try context.save() }
+            if context.hasChanges {
+                try context.save()
+                scheduleTranscriptSync()
+            }
 
             for (index, copy) in applied { utterancesByIndex[index] = copy }
             pendingEdits = [:]
@@ -651,6 +671,11 @@ final class TranscriptEditorModel {
     ///
     /// `body` must not return a `PersistentModel` — the same rule
     /// `SwiftDataProfileSource` and `TranscriptionJob` hold themselves to.
+    ///
+    /// A save here means the transcript changed, so this is also the single
+    /// place the files on disk are told about it. Every speaker operation goes
+    /// through this function; text edits come in via ``flushPendingEdits()``,
+    /// which syncs on its own.
     @discardableResult
     private func withRecording<T>(_ body: (Recording, ModelContext) throws -> T) throws -> T {
         let context = ModelContext(container)
@@ -659,9 +684,60 @@ final class TranscriptEditorModel {
             throw TranscriptEditorError.recordingNotFound
         }
         let result = try body(recording, context)
-        if context.hasChanges { try context.save() }
+        if context.hasChanges {
+            try context.save()
+            scheduleTranscriptSync()
+        }
         return result
     }
+
+    // MARK: - Transcript files
+
+    /// Rewrites `<base> Transcript.md` and `.txt` shortly after a change.
+    ///
+    /// Debounced for the same reason the text edits are: a speaker merge
+    /// touches every utterance it owns, and re-rendering the whole document per
+    /// row would be wasted work the user waits on.
+    func scheduleTranscriptSync() {
+        transcriptSync?.cancel()
+        transcriptSync = Task { [weak self] in
+            try? await Task.sleep(for: Self.transcriptSyncDebounce)
+            guard !Task.isCancelled else { return }
+            self?.syncTranscriptFiles()
+        }
+    }
+
+    /// Rewrites the transcript files now.
+    ///
+    /// Called directly where something is about to *read* the files — a drag
+    /// chip — and on the debounce everywhere else.
+    func syncTranscriptFiles() {
+        transcriptSync?.cancel()
+        transcriptSync = nil
+
+        do {
+            try TranscriptExport.sync(
+                recordingID: recordingID,
+                container: container,
+                libraryRoot: libraryRoot
+            )
+        } catch {
+            // Reported once per screen, not once per keystroke. This runs on a
+            // debounce behind ordinary typing, and a disk that is full or a
+            // folder that has gone read-only would otherwise raise the same
+            // alert every few hundred milliseconds until the user gave up.
+            guard !hasReportedSyncFailure else { return }
+            hasReportedSyncFailure = true
+            errorMessage = "Could not update the transcript files in this recording's folder: "
+                + "\(LibraryModel.describe(error)) Your edits are saved — only the .md and .txt "
+                + "on disk are out of date."
+        }
+    }
+
+    static let transcriptSyncDebounce = Duration.milliseconds(400)
+
+    @ObservationIgnored private var transcriptSync: Task<Void, Never>?
+    @ObservationIgnored private var hasReportedSyncFailure = false
 }
 
 /// Failures the editor raises on its own behalf.

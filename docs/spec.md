@@ -2,7 +2,7 @@
 
 ## Summary
 
-A native macOS app (SwiftUI) that records audio with one click, transcribes recordings after they finish using a cloud STT API with diarization, and resolves diarized speakers to *named people* using locally stored voice profiles — so the user labels a person once and the app recognizes them in future recordings. Recordings and transcripts live in a library where items can be renamed inline (renaming updates both the audio and transcript files) and exported to Markdown, plain text, and Word. Personal tool, not App Store distribution. Architecture should keep a clean separation between UI and core logic so the core can later be reused on iOS.
+A native macOS app (SwiftUI) that records audio with one click, transcribes recordings after they finish using a cloud STT API with diarization, and resolves diarized speakers to *named people* using locally stored voice profiles — so the user labels a person once and the app recognizes them in future recordings. Recordings and transcripts live in a library where items can be renamed inline (renaming updates both the audio and transcript files), each recording being a project folder holding its audio and its Markdown and plain-text transcripts. Personal tool, not App Store distribution. Architecture should keep a clean separation between UI and core logic so the core can later be reused on iOS.
 
 ## Platform and stack
 
@@ -59,9 +59,10 @@ Each profile stores name, embeddings, and optionally the source clips. Profiles 
 ## Library and editor
 
 - Library lists recordings with title, date, duration, transcription status, and detected participants
-- Inline rename edits the title and renames the underlying audio file and export baseline name to match (sanitize illegal filename characters)
-- Files live in a user-visible folder (default `~/Documents/<AppName>/`, configurable), one subfolder per recording containing the `.m4a` and its raw `transcript.raw.json` — not an opaque bundle, so files are grabbable in Finder
-- Rendered exports do **not** sit beside the audio: every `.md`/`.txt`/`.docx` goes into one shared `<root>/Transcripts/` folder, created on demand, so there is a single place to find readable transcripts (revised after first-use feedback; the File menu points at both folders)
+- A recording is named when it stops: the field is pre-filled `YYYY-MM-DD ` with the caret after the date, Enter confirms, and Enter on the bare date is valid (deduped to `2026-08-16 2`). Transcription starts once the name is committed, so nothing renames a folder under a running job
+- Inline rename edits the title and renames the folder and every file inside it to match (sanitize illegal filename characters)
+- Files live in a user-visible folder (default `~/Documents/<AppName>/`, configurable), one subfolder per recording named `YYYY-MM-DD [NAME]` — not an opaque bundle, so files are grabbable in Finder
+- Everything a recording has sits in that one folder: `<base> Recording.m4a`, `<base> Transcript.md`, `<base> Transcript.txt`, and the raw `transcript.raw.json`. Transcripts shared one `<root>/Transcripts/` folder until first-use feedback showed the cost — a recording you cannot drag, copy or send as a single thing, and transcripts matched to audio by filename across two folders. Existing libraries are migrated on launch
 - Every recording can be opened from the library — double-click, the row's disclosure control, or the context menu — including one with no transcript yet, which opens the player plus a "no transcript yet" state
 
 Transcript editor:
@@ -79,10 +80,10 @@ Per recording:
 
 - **Markdown** — `## Speaker — [hh:mm:ss]` turn headers with paragraphs
 - **Plain text** — same structure, no formatting
-- **Word `.docx`** — speaker names bold, timestamps subdued; generate the OOXML directly (a docx is a zip of XML; no heavyweight dependency needed). Must open cleanly in Word and import into Google Docs
-- "Reveal in Finder" and drag-out of both audio and transcript
-- Filenames follow the recording title
-- Every rendered export lands in `<library root>/Transcripts/`, whichever way it was triggered (editor toolbar, library row menu, drag-out). Re-exporting overwrites; renaming a recording renames its exports there too, in the same rolled-back transaction as its folder
+- Both are written automatically when transcription finishes and rewritten whenever the transcript changes — an edited paragraph, a renamed or merged speaker — so the files on disk always match what the app shows. There is no export action and no default-format setting
+- "Reveal in Finder" and drag-out of the audio and both transcripts, each a real file in the project folder
+- Filenames follow the recording's folder name
+- Word `.docx` was specified for v1 and removed: a `.docx` is a document you send, and regenerating one on every keystroke into a folder nobody opens is not that. A `.docx` an earlier version wrote is migrated into its project folder, never deleted
 
 ## Settings
 
@@ -90,7 +91,6 @@ Per recording:
 - Storage folder
 - Similarity threshold
 - Keyterms list
-- Default export format
 - Input device selection
 
 ## Out of scope for v1 (planned later)
@@ -106,8 +106,8 @@ Per recording:
 - A 60-minute two-person meeting records without drops and transcribes end-to-end in one action
 - Both speakers are auto-named correctly when profiles exist
 - A third unknown voice is flagged and, once named, is auto-recognized in the next recording
-- Renaming a recording renames its files on disk
-- All three export formats produce correct speaker-attributed documents
+- Renaming a recording renames its folder and every file inside it
+- Both transcript formats produce correct speaker-attributed documents, and stay current as the transcript is edited
 - The UI never blocks during upload/polling; a failed transcription is retryable without re-recording
 
 ## Implementation notes for the agent

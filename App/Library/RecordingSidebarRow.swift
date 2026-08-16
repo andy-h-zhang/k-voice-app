@@ -34,7 +34,6 @@ struct RecordingSidebarRow: View {
     private var isEditing: Bool { editingID == row.id }
     private var isRunning: Bool { services.jobStatus.running.contains(row.id) }
     private var canTranscribe: Bool { services.hasAPIKey }
-    private var hasTranscript: Bool { row.snapshot.utteranceCount > 0 }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -128,23 +127,8 @@ struct RecordingSidebarRow: View {
 
         Divider()
 
-        RecordingExportMenu(
-            recordingID: row.id,
-            hasTranscript: hasTranscript,
-            container: services.container,
-            libraryRoot: services.libraryRoot,
-            defaultFormat: services.settings.defaultExportFormat
-        ) { result in
-            switch result {
-            case .success(let url):
-                // A sidebar row has nowhere to report success, so the file
-                // itself is the receipt.
-                FinderIntegration.reveal(url)
-            case .failure(let error):
-                services.library.errorMessage = "Could not export: \(LibraryModel.describe(error))"
-            }
-        }
-
+        // No export items: the transcripts are already in the folder this
+        // reveals, under the recording's own name, and kept current.
         Button("Show in Finder") { FinderIntegration.reveal(row.folderURL) }
 
         Divider()

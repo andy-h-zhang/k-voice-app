@@ -2,13 +2,20 @@ import Foundation
 import KVoiceCore
 import SwiftData
 
-/// The app half of Phase 7: turning the rows a user has been editing into the
-/// files the spec's §Export describes.
+/// Keeps each recording's transcript files current.
 ///
 /// Every export reads **current database state** — the edited `Utterance.text`
 /// and the speaker names as assigned, never `transcript.raw.json`. That is the
-/// whole point of edits living in rows: the document a user exports is the
-/// document they were just looking at.
+/// whole point of edits living in rows: the document on disk is the document
+/// the user was just looking at.
+///
+/// ## Why both formats, always
+///
+/// There is no default-format setting any more. A transcript is not something
+/// a user asks for and receives once — it is part of what a recording *is*, so
+/// both renderings sit in the folder from the moment transcription finishes and
+/// are rewritten whenever the transcript changes. Markdown for reading and for
+/// anything that understands it; plain text for everything that does not.
 enum TranscriptExport {
 
     /// Builds the export document for a recording.
@@ -29,38 +36,55 @@ enum TranscriptExport {
         return TranscriptDocument(recording: recording)
     }
 
-    /// The app-wide default export destination: `<library root>/Transcripts`.
+    /// Rewrites every transcript file for a recording, and returns their URLs.
     ///
-    /// One folder for every recording's rendered transcript, rather than one
-    /// file buried in each recording's folder. A user who wants "the transcript
-    /// of Tuesday's standup" opens one place and reads filenames; the File menu
-    /// can point at it, and it is the destination for the export menu, the
-    /// editor toolbar and drag-out alike, so there is never a question of which
-    /// copy is current.
+    /// Called after transcription lands and after every edit that changes what
+    /// a transcript says — text, speaker assignment, merge, clear. Overwrites
+    /// in place, because these files are renderings of database state rather
+    /// than documents with their own history.
     ///
-    /// `Exporter` itself stays destination-agnostic — it writes where it is
-    /// told. This function is the whole of the app's opinion.
-    static func destination(inLibraryRoot libraryRoot: URL) -> URL {
-        RecordingStore.transcriptsFolderURL(inLibraryRoot: libraryRoot)
-    }
-
-    /// Writes an export into the shared transcripts folder and returns its URL.
-    ///
-    /// The folder is created on demand by `Exporter`, so a library that has
-    /// never exported anything does not grow an empty folder. `Exporter`'s
-    /// default `.overwrite` policy means re-exporting after an edit refreshes
-    /// the file instead of piling up "Standup 2.md", "Standup 3.md" — safe in a
-    /// shared folder because `RecordingStore.rename` keeps one base name per
-    /// recording there.
+    /// A recording with no utterances writes nothing: an empty transcript file
+    /// is worse than no file, because it looks like a transcription that
+    /// produced silence rather than one that has not run.
     @discardableResult
-    static func export(
+    static func sync(
         recordingID: UUID,
         container: ModelContainer,
-        libraryRoot: URL,
-        format: ExportFormat
-    ) throws -> URL {
-        let document = try document(for: recordingID, container: container)
-        return try Exporter.export(document, as: format, to: destination(inLibraryRoot: libraryRoot))
+        libraryRoot: URL
+    ) throws -> [URL] {
+        let context = ModelContext(container)
+        guard let recording = try context.recording(id: recordingID) else {
+            throw TranscriptEditorError.recordingNotFound
+        }
+        guard !recording.utterances.isEmpty else { return [] }
+
+        let document = TranscriptDocument(recording: recording)
+        let folder = recording.folder(inRoot: libraryRoot)
+
+        return try ExportFormat.allCases.map { format in
+            try Exporter.write(document, as: format, to: folder.transcriptURL(format))
+        }
+    }
+
+    /// The transcript files that exist on disk for a recording, if any.
+    ///
+    /// Used by the drag chips, which now vend real files rather than exporting
+    /// one on the fly — the files are always there once a transcript is.
+    static func existingFiles(
+        recordingID: UUID,
+        container: ModelContainer,
+        libraryRoot: URL
+    ) -> [ExportFormat: URL] {
+        let context = ModelContext(container)
+        guard let recording = try? context.recording(id: recordingID) else { return [:] }
+        let folder = recording.folder(inRoot: libraryRoot)
+
+        var found: [ExportFormat: URL] = [:]
+        for format in ExportFormat.allCases {
+            let url = folder.transcriptURL(format)
+            if FileManager.default.fileExists(atPath: url.path) { found[format] = url }
+        }
+        return found
     }
 }
 
@@ -74,6 +98,11 @@ enum FileDrag {
     ///
     /// Returns an empty provider when the file is missing, which makes the drag
     /// a no-op instead of a dangling promise the receiver would fail on.
+    ///
+    /// Every drag goes through here now. It used to be that dragging a
+    /// transcript *exported* one first, because no transcript file existed
+    /// until someone asked for it; with both formats maintained in the project
+    /// folder there is always a real file to hand over.
     static func provider(for url: URL) -> NSItemProvider {
         guard FileManager.default.fileExists(atPath: url.path),
             let provider = NSItemProvider(contentsOf: url)
@@ -81,29 +110,5 @@ enum FileDrag {
 
         provider.suggestedName = url.lastPathComponent
         return provider
-    }
-
-    /// Exports the transcript on demand and vends the file that was just
-    /// written.
-    ///
-    /// Synchronous because `onDrag` is: rendering a transcript is string
-    /// building plus one atomic write (a stored-entry zip, for `.docx`), which
-    /// is microseconds for a meeting-sized document. The export lands in the
-    /// shared transcripts folder as usual, so a dragged-out transcript is also
-    /// a transcript the user now has on disk.
-    static func transcriptProvider(
-        recordingID: UUID,
-        container: ModelContainer,
-        libraryRoot: URL,
-        format: ExportFormat
-    ) -> NSItemProvider {
-        guard let url = try? TranscriptExport.export(
-            recordingID: recordingID,
-            container: container,
-            libraryRoot: libraryRoot,
-            format: format
-        ) else { return NSItemProvider() }
-
-        return provider(for: url)
     }
 }

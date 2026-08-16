@@ -93,8 +93,20 @@ final class AppServices {
         let speakerModelState = SpeakerModelState()
         self.speakerModelState = speakerModelState
 
+        // Before anything reads the library: bring a pre-project layout across
+        // to project folders. Idempotent and version-guarded, so this is a
+        // no-op on every launch after the first — and it has to happen before
+        // `LibraryModel` builds its rows, which would otherwise be built from
+        // folder names that are about to change.
+        let migration = LibraryLayoutMigrator.runIfNeeded(
+            settings: settings,
+            store: recordingStore,
+            container: container
+        )
+
         let library = LibraryModel(container: container, store: recordingStore)
         self.library = library
+        library.errorMessage = migration.warning
 
         let speakerModels = SpeakerModels(state: speakerModelState)
         self.speakerModels = speakerModels

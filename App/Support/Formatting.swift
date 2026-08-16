@@ -59,19 +59,6 @@ enum FinderIntegration {
         NSWorkspace.shared.open(url)
     }
 
-    /// Opens `<library root>/Transcripts`, creating it if this library has
-    /// never exported anything.
-    ///
-    /// Creation on demand is the point: the folder is lazy, so "Show
-    /// Transcripts in Finder" on a fresh install would otherwise open nothing
-    /// and look broken. Making it here is honest — the user asked to see the
-    /// folder, so the folder should exist and be empty.
-    static func openTranscriptsFolder(inLibraryRoot root: URL) {
-        let store = RecordingStore(rootURL: root)
-        let folder = (try? store.createTranscriptsFolderIfNeeded()) ?? store.transcriptsFolderURL
-        open(folder)
-    }
-
     /// Opens System Settings at Privacy & Security ▸ Microphone.
     static func openMicrophoneSettings() {
         guard let url = URL(

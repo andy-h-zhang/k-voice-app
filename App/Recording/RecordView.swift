@@ -45,6 +45,11 @@ struct RecordView: View {
                 if session.permission == .denied {
                     microphoneDeniedBanner
                 }
+                if let pending = session.pendingName {
+                    NameRecordingBanner(pending: pending) { typed in
+                        session.commitName(typed)
+                    }
+                }
                 if let saved = session.lastSaved {
                     savedBanner(saved)
                 }

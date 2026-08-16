@@ -60,7 +60,6 @@ struct TranscriptEditorView: View {
     @State private var followPlayback = true
     @State private var assignment: SpeakerAssignmentRequest?
     @State private var merge: SpeakerMergeRequest?
-    @State private var lastExport: URL?
     @State private var didCopy = false
 
     var body: some View {
@@ -213,34 +212,30 @@ struct TranscriptEditorView: View {
                     FinderIntegration.reveal(model.audioURL)
                 }
 
-                FileDragChip(
-                    title: "\(model.title).\(defaultFormat.fileExtension)",
-                    systemImage: "doc.text",
-                    help: "Drag out a \(defaultFormat.displayName) transcript. "
-                        + "Dragging exports it into your Transcripts folder first."
-                ) {
-                    // The drag renders from the database, so anything still
-                    // sitting in the debounce has to land first — otherwise the
-                    // file that leaves the app is missing the user's last
-                    // sentence, and they have no way to know.
-                    model.flushPendingEdits()
-                    return FileDrag.transcriptProvider(
-                        recordingID: model.recordingID,
-                        container: services.container,
-                        libraryRoot: services.libraryRoot,
-                        format: defaultFormat
-                    )
-                } reveal: {
-                    // The folder rather than the file: an export may not have
-                    // been written yet, and the shared Transcripts folder is
-                    // where it will land.
-                    if let lastExport {
-                        FinderIntegration.reveal(lastExport)
-                    } else {
-                        FinderIntegration.openTranscriptsFolder(inLibraryRoot: services.libraryRoot)
+                // One chip per transcript file, both of which are real files in
+                // this recording's own folder. Dragging used to *export* first,
+                // because nothing existed until someone asked; now the files
+                // are maintained as the transcript changes, so a drag is a
+                // plain drag and reveal points at the file itself.
+                ForEach(ExportFormat.allCases, id: \.self) { format in
+                    FileDragChip(
+                        title: model.transcriptFileName(format),
+                        systemImage: "doc.text",
+                        help: "Drag out the \(format.displayName) transcript, "
+                            + "or click to show it in Finder."
+                    ) {
+                        // Rendered from the database, so anything still sitting
+                        // in the debounce has to land first — otherwise the file
+                        // that leaves the app is missing the user's last
+                        // sentence, and they have no way to know.
+                        model.flushPendingEdits()
+                        model.syncTranscriptFiles()
+                        return FileDrag.provider(for: model.transcriptURL(format))
+                    } reveal: {
+                        FinderIntegration.reveal(model.transcriptURL(format))
                     }
+                    .disabled(model.isEmpty)
                 }
-                .disabled(model.isEmpty)
 
                 Spacer()
 
@@ -425,34 +420,17 @@ struct TranscriptEditorView: View {
 
                 Divider()
 
-                RecordingExportMenu(
-                    recordingID: model.recordingID,
-                    hasTranscript: !model.isEmpty,
-                    container: services.container,
-                    libraryRoot: services.libraryRoot,
-                    defaultFormat: defaultFormat,
-                    // Same reason as the drag chip: an export renders from the
-                    // rows, so the debounce has to be drained before it reads them.
-                    willExport: { model.flushPendingEdits() }
-                ) { result in
-                    switch result {
-                    case .success(let url):
-                        lastExport = url
-                        model.statusMessage = "Exported \(url.lastPathComponent)."
-                    case .failure(let error):
-                        model.errorMessage = "Could not export: \(LibraryModel.describe(error))"
-                    }
-                }
-
-                Divider()
-
-                Button(lastExport == nil ? "Show Recording in Finder" : "Show Export in Finder") {
-                    FinderIntegration.reveal(lastExport ?? model.audioURL)
+                // No export items. Both transcripts are already written into
+                // this recording's folder and kept current, so "export" would
+                // mean "write the file that is already there" — the chips in
+                // the header reveal and drag the real thing instead.
+                Button("Show Project Folder in Finder") {
+                    FinderIntegration.reveal(model.audioURL)
                 }
             } label: {
                 Label("Actions", systemImage: "ellipsis.circle")
             }
-            .help("Export this transcript, show it in Finder, or follow playback.")
+            .help("Show this recording in Finder, or follow playback.")
         }
     }
 
@@ -490,10 +468,6 @@ struct TranscriptEditorView: View {
         } catch {
             model.errorMessage = "Could not copy: \(LibraryModel.describe(error))"
         }
-    }
-
-    private var defaultFormat: ExportFormat {
-        services.settings.defaultExportFormat
     }
 
     private var subtitle: String {

@@ -93,8 +93,23 @@ final class RecordingSessionModel {
 
     private(set) var permission: Permission = .unknown
 
-    /// The row written by the last completed recording, for the "saved"
-    /// confirmation and to steer the window to the library.
+    /// The recording that has just been saved and is waiting to be named.
+    ///
+    /// Set the moment ``stop()`` writes the row, and cleared when the user
+    /// commits a name. While it is set, the record screen shows a focused text
+    /// field instead of a confirmation banner — naming is the last step of
+    /// recording, not a chore to come back to.
+    private(set) var pendingName: PendingName?
+
+    struct PendingName: Equatable {
+        let id: UUID
+        /// What the field starts with: `"2026-08-16 "`, cursor after the space.
+        /// The whole string is editable — the date is a head start, not a
+        /// prefix the user is stuck with.
+        let seed: String
+    }
+
+    /// The row written by the last completed recording, once it has a name.
     private(set) var lastSaved: SavedRecording?
 
     struct SavedRecording: Equatable {
@@ -246,6 +261,7 @@ final class RecordingSessionModel {
         errorMessage = nil
         notice = nil
         lastSaved = nil
+        pendingName = nil
         elapsed = 0
         elapsedSeconds = 0
         level = 0
@@ -253,7 +269,7 @@ final class RecordingSessionModel {
 
         let folder: RecordingFolder
         do {
-            folder = try store.createRecording(title: Self.defaultTitle(for: Date()))
+            folder = try store.createRecording(title: Self.provisionalTitle(for: Date()))
         } catch {
             phase = .idle
             errorMessage = "Could not create the recording folder: \(Self.describe(error))"
@@ -348,15 +364,23 @@ final class RecordingSessionModel {
         }
 
         do {
+            let started = startedAt ?? Date()
             let id = try library.insert(
                 folder: folder,
                 duration: summary.duration,
-                createdAt: startedAt ?? Date()
+                createdAt: started
             )
-            // No key is not a failure: the row stays `recorded` and the UI
-            // offers to add one.
-            let enqueued = transcription.enqueue(id)
-            lastSaved = SavedRecording(id: id, title: folder.baseName, enqueued: enqueued)
+
+            // Naming comes first, transcription second.
+            //
+            // A job captures the recording's `folderName` into a snapshot and
+            // rebuilds every path from it. Enqueuing here, while the user is
+            // still typing a name, means the folder gets renamed under a job
+            // that has already resolved where its audio lives. Waiting for the
+            // name costs a few seconds and removes the race — and the name
+            // always lands, because the field commits on blur as well as on
+            // Enter.
+            pendingName = PendingName(id: id, seed: Self.nameSeed(for: started))
             phase = .idle
             return id
         } catch {
@@ -459,6 +483,37 @@ final class RecordingSessionModel {
         lastSaved = nil
     }
 
+    // MARK: - Naming
+
+    /// Commits the name the user typed, then starts transcription.
+    ///
+    /// An empty field is not a failure — it is the fast path. `uniqueName`
+    /// turns a bare date into `2026-08-16`, then `2026-08-16 2`, so pressing
+    /// Enter on an untouched field is a complete, unambiguous answer.
+    ///
+    /// Idempotent, because the field commits on Enter *and* on losing focus,
+    /// and pressing Enter takes focus away.
+    @discardableResult
+    func commitName(_ typed: String) -> UUID? {
+        guard let pending = pendingName else { return nil }
+        pendingName = nil
+
+        // The seed's date, not today's. A recording started at 23:58 and named
+        // at 00:01 belongs to the day it happened on, and the seed is the only
+        // thing that still remembers which day that was.
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = pending.seed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = trimmed.isEmpty ? fallback : trimmed
+        library.rename(id: pending.id, to: title)
+
+        let named = library.row(id: pending.id)?.snapshot.title ?? title
+        // No key is not a failure: the row stays `recorded` and the UI offers
+        // to add one.
+        let enqueued = transcription.enqueue(pending.id)
+        lastSaved = SavedRecording(id: pending.id, title: named, enqueued: enqueued)
+        return pending.id
+    }
+
     // MARK: - Observing the source
 
     private func observe(_ source: MicSource) {
@@ -550,17 +605,39 @@ final class RecordingSessionModel {
 
     // MARK: - Helpers
 
-    /// Default title for a new recording: date first, so the library folder
-    /// sorts chronologically in Finder, and a time so two meetings on one day
-    /// do not become "… 2".
-    static func defaultTitle(for date: Date, timeZone: TimeZone = .current) -> String {
+    /// `YYYY-MM-DD` in the machine's own time zone.
+    ///
+    /// The date a person would say the meeting happened on, which is the local
+    /// one. A UTC stamp would file an evening meeting under tomorrow for
+    /// anyone east of Greenwich.
+    static func dateStamp(for date: Date, timeZone: TimeZone = .current) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
-        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+
+    /// What the naming field is pre-filled with: the date and one space, so
+    /// typing continues the name rather than replacing the date.
+    static func nameSeed(for date: Date, timeZone: TimeZone = .current) -> String {
+        dateStamp(for: date, timeZone: timeZone) + " "
+    }
+
+    /// The folder name a recording is created under, *before* it is named.
+    ///
+    /// Carries a clock time that the final name does not, and deliberately:
+    /// the folder has to exist to receive audio, which is minutes before the
+    /// user types anything, and two recordings started on one day would
+    /// otherwise be competing for `2026-08-16` while both are still running.
+    /// ``commitName(_:)`` renames it to whatever the user chose.
+    static func provisionalTitle(for date: Date, timeZone: TimeZone = .current) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
         return String(
-            format: "%04d-%02d-%02d %02d.%02d Recording",
+            format: "%04d-%02d-%02d %02d.%02d.%02d",
             parts.year ?? 0, parts.month ?? 0, parts.day ?? 0,
-            parts.hour ?? 0, parts.minute ?? 0
+            parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0
         )
     }
 
