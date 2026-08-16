@@ -67,6 +67,7 @@ struct TranscriptEditorView: View {
     @State private var assignment: SpeakerAssignmentRequest?
     @State private var merge: SpeakerMergeRequest?
     @State private var didCopy = false
+    @State private var didCopyTitle = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -193,12 +194,34 @@ struct TranscriptEditorView: View {
             // make room for the tab picker. They read better here anyway: full
             // width instead of truncated, and above the files they describe.
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.title)
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(model.title)
+                // The name and a button that copies it. The recording's title is
+                // also its folder name, and it is the thing that gets pasted into
+                // a message or a doc to say *which* meeting this is — but it was
+                // plain, unselectable `Text`, so the only way to get it out of
+                // the app was to retype it.
+                //
+                // Beside the title rather than in the chip row below: that row
+                // copies the transcript, and two identical glyphs sitting next to
+                // each other would be a guess about which one does what.
+                HStack(spacing: 6) {
+                    Text(model.title)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(model.title)
+
+                    Button {
+                        copyTitle()
+                    } label: {
+                        Image(systemName: didCopyTitle ? "checkmark" : "doc.on.doc")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .help("Copy the recording's name.")
+
+                    Spacer(minLength: 0)
+                }
 
                 Text(subtitle)
                     .font(.caption)
@@ -473,6 +496,22 @@ struct TranscriptEditorView: View {
             }
         } catch {
             model.errorMessage = "Could not copy: \(LibraryModel.describe(error))"
+        }
+    }
+
+    /// Puts the recording's name on the clipboard.
+    ///
+    /// No `flushPendingEdits()`: the title is not part of the debounced
+    /// transcript text, so there is nothing in flight that could make this copy
+    /// stale.
+    private func copyTitle() {
+        Clipboard.copy(model.title)
+        model.statusMessage = "Copied name."
+
+        didCopyTitle = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            didCopyTitle = false
         }
     }
 
