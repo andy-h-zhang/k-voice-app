@@ -18,6 +18,13 @@ targets:
       - package: Core
         product: KVoiceCore
     settings:
+      configs:
+        # Explicit rather than inherited from XcodeGen's presets, because the
+        # `#Preview` blocks and `PreviewSupport.swift` are behind `#if DEBUG`:
+        # if this ever stopped being set, they would silently compile out and
+        # Xcode would report "no previews" with nothing obviously wrong.
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
       base:
         SWIFT_VERSION: "5.0"
         MARKETING_VERSION: "0.1.2"

@@ -266,6 +266,29 @@ final class TranscriptEditorModel {
         }
     }
 
+    /// Re-reads after a transcription job has rewritten this recording's rows.
+    ///
+    /// Drafts are **discarded**, not flushed, and that is the whole reason this
+    /// exists rather than a bare `reload()`:
+    ///
+    /// - `reload()` refreshes `utterancesByIndex` but leaves `pendingEdits`
+    ///   alone, and `text(forUtterance:)` prefers a pending draft over the
+    ///   stored row — so a draft left in place would *shadow* the transcript
+    ///   that just arrived, at whatever index it was typed against.
+    /// - Flushing first would be worse. The job replaced every `Utterance` row
+    ///   before this is called, so the write would land on whichever row now
+    ///   holds that index — silently overwriting a sentence of the new
+    ///   transcript with a sentence of the old one.
+    ///
+    /// The drafts are unrecoverable either way once the job rewrites the rows;
+    /// dropping them is the only option that cannot corrupt what replaced them.
+    func reloadAfterTranscription() {
+        debounce?.cancel()
+        debounce = nil
+        pendingEdits.removeAll()
+        reload()
+    }
+
     /// Re-reads the profile library, for the assignment pickers.
     func refreshPeople() async {
         do {

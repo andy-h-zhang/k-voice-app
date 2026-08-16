@@ -61,6 +61,7 @@ struct TranscriptEditorView: View {
     @State private var assignment: SpeakerAssignmentRequest?
     @State private var merge: SpeakerMergeRequest?
     @State private var lastExport: URL?
+    @State private var didCopy = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -114,6 +115,31 @@ struct TranscriptEditorView: View {
         }
         .onChange(of: model.turns) { _, _ in
             playback.setSpans(model.orderedUtterances)
+        }
+        // A finished job rewrote this recording's rows through its own
+        // `ModelContext`, and nothing in the model observes the store — so the
+        // pane sat on "No Transcript Yet" until the screen was rebuilt, which
+        // is exactly what clicking away and back was doing by hand. Reload in
+        // place instead, and the empty state's promise that "the transcript
+        // appears here when it lands" becomes true.
+        //
+        // Keyed on the *running* set rather than a `.done` event because
+        // `markFinished` fires after the job's terminal event, so the rows are
+        // committed by the time this runs. It covers failures too, where the
+        // reload is a no-op and the failure message renders as before.
+        //
+        // Not `.task(id:)` keyed on job status: that rebuilds the whole model
+        // and drops pending edits, the data loss `RootView` goes out of its way
+        // to avoid.
+        .onChange(of: isTranscribing) { wasRunning, isRunning in
+            guard wasRunning, !isRunning else { return }
+            model.reloadAfterTranscription()
+        }
+        // The job may have landed while this screen was off-screen entirely —
+        // the user watching the sidebar from the Record tab. Nothing is at
+        // stake when there is no transcript yet, so re-read on the way in.
+        .onAppear {
+            if model.isEmpty { model.reloadAfterTranscription() }
         }
         .sheet(item: $assignment) { request in
             SpeakerAssignmentSheet(
@@ -217,6 +243,24 @@ struct TranscriptEditorView: View {
                 .disabled(model.isEmpty)
 
                 Spacer()
+
+                // Pasting the transcript somewhere is the common case; the drag
+                // chips beside this one cover the far rarer "I want the file".
+                //
+                // `⌘⇧C`, not `⌘C`: every paragraph on this screen is an
+                // editable text field, and `⌘C` has to keep meaning "copy my
+                // selection" inside one. Same reason the transport bar avoids
+                // no-modifier key equivalents.
+                Button {
+                    copyTranscript()
+                } label: {
+                    Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .disabled(model.isEmpty)
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .help("Copy the transcript as plain text.")
             }
 
             if !model.speakers.isEmpty {
@@ -413,6 +457,40 @@ struct TranscriptEditorView: View {
     }
 
     // MARK: - Helpers
+
+    /// Puts the transcript on the clipboard as plain text.
+    ///
+    /// Deliberately the plain-text *export*, character for character — title,
+    /// date, and `Speaker — [hh:mm:ss]` headers — rather than a second,
+    /// slightly-different rendering that would make a pasted transcript
+    /// disagree with an exported one.
+    private func copyTranscript() {
+        // Renders from the database, so the debounce has to drain first — the
+        // same reason the transcript drag chip and the export menu do it.
+        // Without this, copying right after typing silently omits the last
+        // sentence.
+        model.flushPendingEdits()
+
+        do {
+            let document = try TranscriptExport.document(
+                for: model.recordingID,
+                container: services.container
+            )
+            Clipboard.copy(PlainTextRenderer.render(document))
+            model.statusMessage = "Copied transcript."
+
+            // The status line says what happened; the glyph says it at the
+            // point the user is already looking. It reverts on its own so the
+            // button does not sit lying about a copy made minutes ago.
+            didCopy = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                didCopy = false
+            }
+        } catch {
+            model.errorMessage = "Could not copy: \(LibraryModel.describe(error))"
+        }
+    }
 
     private var defaultFormat: ExportFormat {
         services.settings.defaultExportFormat
@@ -622,3 +700,54 @@ struct TransportBar: View {
         .background(.bar)
     }
 }
+
+// MARK: - Previews
+
+// Sub-second iteration on this screen, which otherwise costs a rebuild, a
+// relaunch, and — for anything but the empty state — an actual transcription.
+// The fixture and the caveats are in `PreviewSupport.swift`; the short version
+// is that these are the real services over a throwaway library, so speaker
+// assignment, editing, and Copy all genuinely work here.
+//
+// `TranscriptEditorScreen` rather than `TranscriptEditorView`, so the preview
+// exercises the real model construction and its `.task`-driven first load.
+// `NavigationStack` so the toolbar has somewhere to render.
+#if DEBUG
+
+#Preview("Transcript") {
+    let fixture = PreviewFixture.make(.populated)
+    NavigationStack {
+        TranscriptEditorScreen(recordingID: fixture.recordingID)
+    }
+    .environment(fixture.services)
+    .frame(width: 900, height: 720)
+}
+
+#Preview("No Transcript Yet") {
+    let fixture = PreviewFixture.make(.empty)
+    NavigationStack {
+        TranscriptEditorScreen(recordingID: fixture.recordingID)
+    }
+    .environment(fixture.services)
+    .frame(width: 900, height: 720)
+}
+
+#Preview("Transcription Failed") {
+    let fixture = PreviewFixture.make(.failed)
+    NavigationStack {
+        TranscriptEditorScreen(recordingID: fixture.recordingID)
+    }
+    .environment(fixture.services)
+    .frame(width: 900, height: 720)
+}
+
+#Preview("No API Key") {
+    let fixture = PreviewFixture.make(.noAPIKey)
+    NavigationStack {
+        TranscriptEditorScreen(recordingID: fixture.recordingID)
+    }
+    .environment(fixture.services)
+    .frame(width: 900, height: 720)
+}
+
+#endif

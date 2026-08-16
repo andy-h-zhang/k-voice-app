@@ -80,3 +80,22 @@ enum FinderIntegration {
         NSWorkspace.shared.open(url)
     }
 }
+
+/// The system clipboard.
+///
+/// The copy-out counterpart to `FileDrag`: the same rendered transcript, for
+/// the far more common case of pasting it into a message or a document rather
+/// than dropping a file into Finder.
+enum Clipboard {
+
+    /// Replaces the clipboard's contents with `text`.
+    ///
+    /// `clearContents()` first is required, not tidiness — a pasteboard keeps
+    /// whatever types the last owner declared, and writing without clearing
+    /// leaves a stale richer representation that a paste would prefer over the
+    /// string just written.
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}

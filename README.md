@@ -22,6 +22,55 @@ make clean      # removes .build/, the generated project, and build/
 Before `make release` or `make install`, bump the build number by hand — see
 [Versioning](#versioning--bump-this-by-hand-before-every-release) below.
 
+## Iterating on the UI
+
+**Do not use `make install` as a development loop.** It chains
+`release` → `test` → a full Release build → codesign → a swap into
+`/Applications`, so a one-line change to a button costs the entire test suite
+and an optimized build. It also re-triggers the Keychain dialog every time, for
+the reason in [Why the Keychain sometimes asks for your
+password](#why-the-keychain-sometimes-asks-for-your-password) below: an ad-hoc signature's
+identity is the binary's `cdhash`, which changes on every rebuild.
+
+Two faster loops, in order of speed:
+
+**SwiftUI previews** — the fastest, and enough for most visual work. Open the
+generated project and use the canvas; edits re-render in under a second, with no
+launch and no transcription.
+
+```sh
+make generate && open KVoice.xcodeproj
+```
+
+`App/Support/PreviewSupport.swift` supplies `PreviewFixture`, a whole
+`AppServices` over a **temporary** library folder and an in-memory API key,
+seeded with a fake transcript — two named speakers, one unnamed, six turns. The
+services and models are the real ones, so speaker assignment, editing, export
+and copy all genuinely work in the canvas. `TranscriptEditorView.swift` ends
+with four previews covering the states that are otherwise expensive to reach:
+`Transcript`, `No Transcript Yet`, `Transcription Failed`, and `No API Key`.
+
+The fixture writes no audio file, so previews of the editor show the transport
+bar's "audio file is missing" notice. Playback is the one thing the canvas
+cannot exercise.
+
+To preview another screen, take the same three lines:
+
+```swift
+#Preview("Whatever") {
+    let fixture = PreviewFixture.make(.populated)
+    SomeView().environment(fixture.services)
+}
+```
+
+**⌘R from Xcode** — for anything previews can't cover (playback, recording, a
+real transcription). An incremental Debug build after a one-file edit is a
+couple of seconds, against minutes for `make install`.
+
+Both are Debug-only: the fixture and the previews are behind `#if DEBUG`, which
+`project.yml` sets explicitly under `settings ▸ configs ▸ Debug`. Nothing in
+this section ships in a Release build.
+
 ## Versioning — bump this by hand before every release
 
 Nothing bumps the version for you. Do it yourself, in `project.yml`, **before**
