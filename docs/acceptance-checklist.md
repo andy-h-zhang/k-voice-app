@@ -315,8 +315,49 @@ stopped redrawing. Re-walk all of this after any change to `MicSource`,
       that used to stall the main thread.
 - [ ] While recording, **⌘Q**. The "Stop recording and quit?" confirmation still
       appears, and Stop-and-Quit produces a playable `.m4a`.
-- [ ] Unplug or switch the input device mid-recording. The paused/device-changed
-      banner appears, the window stays responsive, and **Resume** works.
+- [ ] Unplug or switch the input device mid-recording. Capture **continues** on
+      whatever device is there now, in the same file and with the clock running
+      on — recovery is automatic and silent. The paused/device-changed banner is
+      now only for the case below.
+- [ ] Unplug the *only* input device mid-recording. **Now** the banner appears,
+      the window stays responsive, and **Resume** works once something is
+      plugged back in.
+
+---
+
+## M. Third QA round: a chosen input device — [QA3]
+
+Reported as recording freezing the app on some machines and not others. The
+machine had nothing to do with it: the trigger is whether the **input picker has
+ever been touched**. With "System Default" selected the app worked; with a
+specific microphone selected it recorded **zero frames** — the clock stayed at
+0:00, the meter stayed flat, and the device-changed banner appeared a second in.
+Pressing Resume restarted the engine and provoked exactly the same thing again.
+It looked machine-specific because it only bites when the chosen device's sample
+rate differs from the one `AVAudioEngine` cached before the device was selected.
+
+Re-walk this after any change to `MicSource`, and note that **the default device
+is the one configuration that always worked** — testing only that proves nothing.
+
+- [ ] In Record, open the input picker and choose a **specific** microphone
+      (not "System Default") — even if it is the one already in use. Record for
+      30 seconds. The clock runs, the meter moves, and the saved recording is 30
+      seconds of audible audio.
+- [ ] Repeat for **every** input device on the machine, especially one whose
+      sample rate differs from the built-in microphone's (a USB interface or a
+      wired headset at 44.1 kHz next to a 48 kHz built-in mic is the classic
+      pair). `speakerlab record --list-devices` prints the rates.
+- [ ] Switch back to **System Default** and record again. Still fine.
+- [ ] Choose a specific device in **Settings** rather than in Record, and confirm
+      the Record screen's picker agrees and that recording still works.
+- [ ] The automated equivalent of the first two, on a machine with a microphone:
+
+      ```
+      cd Core && KVOICE_AUDIO_TESTS=1 swift test --filter MicSourceDeviceCapture
+      ```
+
+      It records from every connected device by UID and fails on a zero-frame
+      capture. Off by default — CI has neither a microphone nor a TCC grant.
 
 ---
 
