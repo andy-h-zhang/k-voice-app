@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 struct RecordView: View {
 
     @Environment(AppServices.self) private var services
+    @Environment(\.theme) private var theme
 
     private var session: RecordingSessionModel { services.recorder }
 
@@ -88,7 +89,14 @@ struct RecordView: View {
             // digit clock does not need the digits to slide; it needs the main
             // thread free.
             Text(Display.elapsed(session.elapsed))
-                .font(.system(size: 60, weight: .light, design: .rounded))
+                // Rounded is the clock's native personality; a theme with a
+                // display face of its own (Nocturne's serif, Graphite's mono)
+                // takes over here, the one display moment in the app.
+                .font(.system(
+                    size: 60,
+                    weight: .light,
+                    design: theme.spec.displayDesign == .standard ? .rounded : theme.displayDesign
+                ))
                 .monospacedDigit()
                 .foregroundStyle(session.isActive ? .primary : .secondary)
 
@@ -338,6 +346,8 @@ struct NoticeBanner<Accessory: View>: View {
     let message: String
     @ViewBuilder var accessory: () -> Accessory
 
+    @Environment(\.theme) private var theme
+
     init(
         icon: String,
         tint: Color,
@@ -378,7 +388,23 @@ struct NoticeBanner<Accessory: View>: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
+        .background {
+            // Glass themes wash their material with the palette's tint — the
+            // wash goes *under* the content, over the material.
+            let shape = RoundedRectangle(cornerRadius: theme.isSystem ? 8 : theme.radius.medium)
+            shape
+                .fill(theme.surface)
+                .overlay { shape.fill(theme.surfaceTint ?? .clear) }
+        }
+        .overlay {
+            // The minimal themes draw a hairline instead of casting a shadow.
+            if let border = theme.surfaceBorder {
+                RoundedRectangle(cornerRadius: theme.radius.medium)
+                    .strokeBorder(border)
+                    .allowsHitTesting(false)
+            }
+        }
+        .themeShadow(theme)
     }
 
     private var symbol: some View {

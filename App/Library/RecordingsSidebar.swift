@@ -20,6 +20,7 @@ import SwiftUI
 struct RecordingsSidebar: View {
 
     @Environment(AppServices.self) private var services
+    @Environment(\.theme) private var theme
 
     @State private var editingID: UUID?
     @State private var draftTitle = ""
@@ -46,11 +47,18 @@ struct RecordingsSidebar: View {
                     }
                 }
                 .listStyle(.sidebar)
+                // On a custom theme the list's own material would sit as a
+                // gray slab over the gradient; hidden, the themed background
+                // below shows through. On System, untouched.
+                .scrollContentBackground(theme.isSystem ? .automatic : .hidden)
             }
 
             Divider()
             footer
         }
+        // Dimmed a step past the detail column's background, so the two panes
+        // still read as two panes without the system material's help.
+        .background { ThemeBackground(dimmed: true) }
         .onAppear { library.reload() }
         .confirmationDialog(
             "Move “\(pendingDelete?.title ?? "")” to the Trash?",

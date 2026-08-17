@@ -99,6 +99,7 @@ struct RootView: View {
                 idealHeight: 480,
                 maxHeight: .infinity
             )
+            .background { ThemeBackground() }
             .toolbar {
                 // Declared here rather than inside the switch, so the tab bar is
                 // not torn down and rebuilt every time the route changes.
@@ -119,6 +120,12 @@ struct RootView: View {
                 }
             }
         }
+        // Inside RootView rather than around the `WindowGroup`'s content: a
+        // wrapper there would change the window's frame-autosave key
+        // (`KVoiceApp.swift`, bottom comment); a modifier here does not change
+        // RootView's type, and `preferredColorScheme` reaches the window from
+        // any depth.
+        .themed(services.theme)
         // Hoisted out of the library screen: these errors now come from the
         // sidebar's own actions *and* from the editor's export handler, so the
         // alert has to be somewhere that presents whatever the route is.
