@@ -33,6 +33,7 @@ struct EnrollmentRequest: Identifiable {
 struct PeopleView: View {
 
     @Environment(AppServices.self) private var services
+    @Environment(\.theme) private var theme
 
     @State private var enrollment: EnrollmentRequest?
     @State private var confirmingDelete: PersonSummary?
@@ -146,6 +147,9 @@ struct PeopleView: View {
                     Button("Delete…", role: .destructive) { confirmingDelete = person }
                 }
         }
+        // On a custom theme the list's own backdrop would sit as a slab over
+        // the window gradient. On System, untouched.
+        .scrollContentBackground(theme.isSystem ? .automatic : .hidden)
     }
 
     // MARK: - Detail

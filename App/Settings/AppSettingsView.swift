@@ -10,6 +10,7 @@ import SwiftUI
 struct AppSettingsView: View {
 
     @Environment(AppServices.self) private var services
+    @Environment(\.theme) private var theme
 
     private var model: AppSettingsModel { services.appSettings }
 
@@ -21,6 +22,9 @@ struct AppSettingsView: View {
                 }
             }
 
+            // First, because it is the one section whose effect is visible
+            // while you are standing in it.
+            AppearanceSection()
             APIKeySection()
             SpeechModelSection()
             StorageSection()
@@ -28,6 +32,9 @@ struct AppSettingsView: View {
             SpeakerMatchingSection()
         }
         .formStyle(.grouped)
+        // On a custom theme the grouped form's own backdrop would hide the
+        // gradient; the section row fills stay native either way.
+        .scrollContentBackground(theme.isSystem ? .automatic : .hidden)
         // A reading column, not a fixed panel. Both of the frames that used to
         // be here were written for a standalone Settings window and are actively
         // harmful now that this is the detail column:

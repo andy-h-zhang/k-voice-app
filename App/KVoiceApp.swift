@@ -109,6 +109,16 @@ struct KVoiceApp: App {
                     GoMenu(services: services)
                 }
             }
+
+            // Appearance lives in the View menu, and it is a menu command for
+            // the same reason the Go items are: ⌘O has to work from any tab,
+            // and a shortcut on a view only fires while that view is showing.
+            CommandGroup(before: .toolbar) {
+                if let services {
+                    ThemeCommands(services: services)
+                    Divider()
+                }
+            }
         }
 
         // There is deliberately no `Settings` scene. Settings is the third tab

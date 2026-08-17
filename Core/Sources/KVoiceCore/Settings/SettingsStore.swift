@@ -67,6 +67,8 @@ public final class SettingsStore: @unchecked Sendable {
         public static let libraryLayoutVersion = "kvoice.settings.libraryLayoutVersion"
         public static let inputDeviceUID = "kvoice.settings.inputDeviceUID"
         public static let speechModelPreference = "kvoice.settings.speechModelPreference"
+        public static let themeID = "kvoice.settings.themeID"
+        public static let appearanceMode = "kvoice.settings.appearanceMode"
     }
 
     /// Settings-UI range for the threshold slider (plan §3 decision 7).
@@ -97,7 +99,8 @@ public final class SettingsStore: @unchecked Sendable {
     public func removeAll() {
         for key in [
             Key.storageFolderPath, Key.similarityThreshold, Key.keyterms,
-            Key.libraryLayoutVersion, Key.inputDeviceUID, Key.speechModelPreference
+            Key.libraryLayoutVersion, Key.inputDeviceUID, Key.speechModelPreference,
+            Key.themeID, Key.appearanceMode
         ] {
             defaults.removeObject(forKey: key)
         }
@@ -191,6 +194,34 @@ public final class SettingsStore: @unchecked Sendable {
             return preference
         }
         set { defaults.set(newValue.rawValue, forKey: Key.speechModelPreference) }
+    }
+
+    /// Which theme the app wears. Unset — or a value from a theme that no
+    /// longer exists — means ``ThemeID/system``, the native look.
+    ///
+    /// Deliberately **not** part of ``SettingsSnapshot``: that type freezes
+    /// the settings a transcription job runs with, and appearance has no say
+    /// in a request already on the wire.
+    public var themeID: ThemeID {
+        get {
+            guard let raw = defaults.string(forKey: Key.themeID),
+                let id = ThemeID(rawValue: raw)
+            else { return .system }
+            return id
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.themeID) }
+    }
+
+    /// Whether the app follows macOS's appearance or holds a light/dark
+    /// override. Unset or unrecognized means follow the system.
+    public var appearanceMode: AppearanceMode {
+        get {
+            guard let raw = defaults.string(forKey: Key.appearanceMode),
+                let mode = AppearanceMode(rawValue: raw)
+            else { return .system }
+            return mode
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.appearanceMode) }
     }
 
     // MARK: - Snapshots

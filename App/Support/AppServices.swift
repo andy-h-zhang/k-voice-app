@@ -52,6 +52,10 @@ final class AppServices {
     /// storage-folder move that is waiting on a relaunch.
     let appSettings: AppSettingsModel
 
+    /// Which theme the app wears, and whether it overrides light/dark. Lives
+    /// here rather than in a view so ⌘O works with no window on screen.
+    let theme: ThemeManager
+
     /// Whether an AssemblyAI key can be resolved right now — the environment
     /// variable or the Keychain (``APIKeyResolver``).
     ///
@@ -142,6 +146,8 @@ final class AppServices {
             store: recordingStore
         )
         self.appSettings = appSettings
+
+        self.theme = ThemeManager(settings: settings)
 
         self.hasAPIKey = APIKeyResolver.resolve(keychain: keychain) != nil
 

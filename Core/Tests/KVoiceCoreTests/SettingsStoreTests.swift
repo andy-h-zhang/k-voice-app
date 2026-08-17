@@ -38,6 +38,34 @@ struct SettingsStoreTests {
         #expect(suite.store.keyterms.isEmpty)
         #expect(suite.store.libraryLayoutVersion == 0)
         #expect(suite.store.inputDeviceUID == nil)
+        #expect(suite.store.themeID == .system)
+        #expect(suite.store.appearanceMode == .system)
+    }
+
+    @Test("theme and appearance round-trip")
+    func themeRoundTrip() {
+        let suite = SettingsSuite()
+        defer { suite.cleanUp() }
+
+        suite.store.themeID = .aurora
+        suite.store.appearanceMode = .dark
+
+        let reader = SettingsStore(defaults: suite.defaults, defaultStorageFolderURL: suite.defaultRoot)
+        #expect(reader.themeID == .aurora)
+        #expect(reader.appearanceMode == .dark)
+    }
+
+    @Test("an unrecognized stored theme or mode degrades to system, not a crash")
+    func themeGarbageDegrades() {
+        let suite = SettingsSuite()
+        defer { suite.cleanUp() }
+
+        // A theme removed in a later version, or a hand-edited plist: the
+        // stale string must read as the native look.
+        suite.defaults.set("solarpunk", forKey: SettingsStore.Key.themeID)
+        suite.defaults.set("sepia", forKey: SettingsStore.Key.appearanceMode)
+        #expect(suite.store.themeID == .system)
+        #expect(suite.store.appearanceMode == .system)
     }
 
     @Test("the real default library root is ~/Documents/KVoice")
@@ -205,12 +233,16 @@ struct SettingsStoreTests {
         suite.store.similarityThreshold = 0.75
         suite.store.keyterms = ["Kizaki"]
         suite.store.inputDeviceUID = "device-1"
+        suite.store.themeID = .lagoon
+        suite.store.appearanceMode = .light
         suite.store.removeAll()
 
         #expect(suite.store.similarityThreshold == ClusterMatcher.defaultThreshold)
         #expect(suite.store.keyterms.isEmpty)
         #expect(suite.store.inputDeviceUID == nil)
         #expect(suite.store.storageFolderURL == suite.defaultRoot)
+        #expect(suite.store.themeID == .system)
+        #expect(suite.store.appearanceMode == .system)
     }
 
     @Test("an ephemeral store starts empty")
