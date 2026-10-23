@@ -126,6 +126,17 @@ criterion; **[P2]**–**[P7]** = a visual check that phase's work left behind.
       enrollment. It must fail with "The voice models aren't available" and a
       **Show Model Folder** button — not hang and not crash. Restore Wi-Fi and
       let it re-download. **[P6]**
+- [ ] **Voice Samples ▸ Export All Voice Samples…** saves a `.kvoicevoices`
+      file and reports how many people and samples it holds. Right-click one
+      person ▸ **Export Voice Samples…** saves just them (disabled for someone
+      with no voice).
+- [ ] On a second Mac (or after deleting the people), **Import Voice
+      Samples…** from the empty People screen: the confirmation lists who is
+      new, the people appear with the same sample counts, and a new recording
+      names them just as the original Mac does.
+- [ ] Import the same file where one of the people already exists: the
+      confirmation says their samples will be replaced, and afterwards their
+      transcripts still name them.
 
 ## F. Full pipeline with a key: record → transcribe → auto-name — [Spec] [P4]
 
