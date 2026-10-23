@@ -43,6 +43,14 @@ struct RecordView: View {
                         message: notice
                     )
                 }
+                if let deviceNotice = session.deviceNotice {
+                    NoticeBanner(
+                        icon: "mic.fill",
+                        tint: .blue,
+                        title: "Switched microphone",
+                        message: deviceNotice
+                    )
+                }
                 if session.permission == .denied {
                     microphoneDeniedBanner
                 }
@@ -226,12 +234,11 @@ struct RecordView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .disabled(session.isActive)
         .font(.callout)
         .foregroundStyle(.secondary)
         .help(
             session.isActive
-                ? "A recording keeps the device it started on. Stop it to switch inputs."
+                ? "Switch microphones without stopping. The recording continues in the same file."
                 : "Choose which microphone the next recording uses."
         )
         .task { await session.refreshInputDevices() }

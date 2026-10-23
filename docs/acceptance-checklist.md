@@ -319,9 +319,23 @@ stopped redrawing. Re-walk all of this after any change to `MicSource`,
       whatever device is there now, in the same file and with the clock running
       on — recovery is automatic and silent. The paused/device-changed banner is
       now only for the case below.
-- [ ] Unplug the *only* input device mid-recording. **Now** the banner appears,
-      the window stays responsive, and **Resume** works once something is
-      plugged back in.
+- [ ] Unplug the *only* input device mid-recording. **Now** the banner appears
+      (within ~2 s), the window stays responsive, and plugging something back
+      in resumes the recording **by itself** (Resume also works).
+- [ ] With **System default** selected, connect AirPods (or any Bluetooth
+      headset) mid-recording so they become the default input. Recording keeps
+      going on them after a gap of a few seconds at most, with no paused banner,
+      and the device label under the record button changes to the headset.
+      Switch the default input back in Control Center: same again.
+- [ ] **While recording**, open the input picker under the record button. It is
+      enabled. Pick a different microphone: the recording keeps running (clock
+      keeps counting after a short gap), the label shows the new device, and
+      the saved file has audio from both. Changing the input in Settings while
+      recording does the same.
+- [ ] Choose a **specific** USB/Bluetooth mic, start recording, then unplug it.
+      Recording continues on the system default, a blue "Switched microphone"
+      banner says so, and the label shows the new device. The saved file has
+      audio from both mics.
 
 ---
 
