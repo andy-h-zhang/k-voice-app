@@ -55,8 +55,20 @@ struct RecordView: View {
                     microphoneDeniedBanner
                 }
                 if let pending = session.pendingName {
-                    NameRecordingBanner(pending: pending) { typed in
-                        session.commitName(typed)
+                    NameRecordingBanner(
+                        pending: pending,
+                        commit: { typed in session.commitName(typed, for: pending.id) },
+                        discard: { session.discardPendingRecording() }
+                    )
+                }
+                if session.didDiscardRecording {
+                    NoticeBanner(
+                        icon: "trash",
+                        tint: .secondary,
+                        title: "Recording deleted",
+                        message: ""
+                    ) {
+                        Button("Dismiss") { session.dismissDiscardConfirmation() }
                     }
                 }
                 if let saved = session.lastSaved {
@@ -425,10 +437,13 @@ struct NoticeBanner<Accessory: View>: View {
             Text(title)
                 .font(.subheadline)
                 .fontWeight(.semibold)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // An empty message means a title-only banner, not a blank line.
+            if !message.isEmpty {
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         // Without a stated ideal, the paragraph's ideal width is the whole
         // string on one line, `ViewThatFits` never judges the side-by-side

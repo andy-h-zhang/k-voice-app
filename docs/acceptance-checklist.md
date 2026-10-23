@@ -63,6 +63,12 @@ criterion; **[P2]**–**[P7]** = a visual check that phase's work left behind.
       the resume. **[P2]**
 - [ ] Record a second short clip and quit mid-recording with **Stop and Quit**:
       the file is finalized, not truncated garbage — it opens and plays. **[P4]**
+- [ ] Record a few seconds, **Stop**, and click **Delete** in the "Name this
+      recording" banner. A "Recording deleted" banner appears, the row is gone
+      from Recordings, its folder is in the Trash, and no transcription job ever
+      starts (nothing appears as transcribing, and AssemblyAI shows no upload).
+- [ ] Record again, Stop, then click somewhere else instead of naming it. It
+      is still named with the date and transcribed, as before.
 
 ## C. Rename, delete, and Finder parity — [Spec] [P2] [P4]
 

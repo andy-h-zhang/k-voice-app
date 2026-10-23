@@ -114,6 +114,11 @@ final class RecordingSessionModel {
         let seed: String
     }
 
+    /// True right after ``discardPendingRecording()`` threw a recording away,
+    /// so the record screen can say where it went. Cleared by the next
+    /// recording or by dismissing it.
+    private(set) var didDiscardRecording = false
+
     /// The row written by the last completed recording, once it has a name.
     private(set) var lastSaved: SavedRecording?
 
@@ -299,6 +304,7 @@ final class RecordingSessionModel {
         notice = nil
         deviceNotice = nil
         lastSaved = nil
+        didDiscardRecording = false
         pendingName = nil
         elapsed = 0
         elapsedSeconds = 0
@@ -531,9 +537,14 @@ final class RecordingSessionModel {
     ///
     /// Idempotent, because the field commits on Enter *and* on losing focus,
     /// and pressing Enter takes focus away.
+    ///
+    /// - Parameter id: The recording the name is for. The field's focus-loss
+    ///   commit is delayed, so by the time it lands the pending recording may
+    ///   be a different one, or none; a name meant for another recording is
+    ///   dropped.
     @discardableResult
-    func commitName(_ typed: String) -> UUID? {
-        guard let pending = pendingName else { return nil }
+    func commitName(_ typed: String, for id: UUID? = nil) -> UUID? {
+        guard let pending = pendingName, id == nil || id == pending.id else { return nil }
         pendingName = nil
 
         // The seed's date, not today's. A recording started at 23:58 and named
@@ -550,6 +561,28 @@ final class RecordingSessionModel {
         let enqueued = transcription.enqueue(pending.id)
         lastSaved = SavedRecording(id: pending.id, title: named, enqueued: enqueued)
         return pending.id
+    }
+
+    /// Throws away the recording that was just stopped, instead of naming it —
+    /// for one started by accident.
+    ///
+    /// Only possible while it is still waiting for a name, and that is the
+    /// point: transcription does not start until a name is committed, so a
+    /// recording discarded here never reaches the transcription service and
+    /// costs nothing. It goes to the Trash, not straight to oblivion, so a
+    /// misclick is recoverable.
+    ///
+    /// Clears ``pendingName`` first, which also turns any name commit still in
+    /// flight from the field (see `NameRecordingBanner`) into a no-op.
+    func discardPendingRecording() {
+        guard let pending = pendingName else { return }
+        pendingName = nil
+        library.moveToTrash(id: pending.id)
+        didDiscardRecording = true
+    }
+
+    func dismissDiscardConfirmation() {
+        didDiscardRecording = false
     }
 
     // MARK: - Observing the source
