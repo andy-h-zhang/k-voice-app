@@ -1,7 +1,9 @@
+import AppKit
 import Foundation
 import KVoiceCore
 import Observation
 import SwiftData
+import UniformTypeIdentifiers
 
 /// The People section's state and every mutation it offers (spec §Voice
 /// profiles: "Per-profile actions: rename, re-enroll, delete, reset learned
@@ -177,6 +179,112 @@ final class PeopleModel {
         await reload()
         selection = personID
         onProfilesChanged?()
+    }
+
+    // MARK: - Voice-sample files
+
+    /// A file the user picked to import, read and checked, waiting for them to
+    /// confirm what it will add and replace.
+    struct PendingImport: Identifiable {
+        let id = UUID()
+        let fileName: String
+        let archive: VoiceSampleArchive
+        let preview: VoiceSampleImportSummary
+    }
+
+    /// Set while the import confirmation is showing.
+    var pendingImport: PendingImport?
+
+    /// The outcome of an export or import, shown as an alert.
+    var voiceFileMessage: String?
+
+    /// `.kvoicevoices`, a JSON file. Declared dynamically rather than in the
+    /// app's Info.plist: nothing needs to open these by double-click, only the
+    /// panels below need to recognize them.
+    static let voiceFileType = UTType(
+        filenameExtension: VoiceSampleArchive.fileExtension,
+        conformingTo: .json
+    ) ?? .json
+
+    /// Saves everyone's voice samples — or one person's — to a file another
+    /// copy of KVoice can import, so it recognizes the same people the same way.
+    func exportVoiceSamples(only person: PersonSummary? = nil) async {
+        let archive: VoiceSampleArchive
+        do {
+            archive = try await profiles.exportVoiceSamples(personIDs: person.map { [$0.id] })
+        } catch {
+            errorMessage = Self.describe(error)
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [Self.voiceFileType]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = person.map { "\($0.name) Voice Samples" } ?? "KVoice Voice Samples"
+        panel.message = """
+            In the other copy of KVoice, choose People ▸ Import Voice Samples… and pick this file.
+            """
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try archive.encoded().write(to: url, options: .atomic)
+            voiceFileMessage = """
+                Saved \(Self.peopleCount(archive.people.count)) with \
+                \(Self.sampleCount(archive.sampleCount)) to “\(url.lastPathComponent)”.
+                """
+        } catch {
+            errorMessage = "Could not save the voice samples: \(Self.describe(error))"
+        }
+    }
+
+    /// Asks for a voice-sample file, checks it, and stages it for
+    /// confirmation. Nothing changes until ``confirmImport()``.
+    func chooseVoiceSamplesToImport() async {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [Self.voiceFileType, .json]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        panel.message = "Choose a voice-samples file exported from KVoice."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let archive = try VoiceSampleArchive.decode(try Data(contentsOf: url))
+            let preview = try await profiles.previewImport(archive)
+            pendingImport = PendingImport(fileName: url.lastPathComponent, archive: archive, preview: preview)
+        } catch {
+            errorMessage = Self.describe(error)
+        }
+    }
+
+    /// Imports the staged file.
+    func confirmImport() async {
+        guard let pending = pendingImport else { return }
+        pendingImport = nil
+
+        do {
+            let summary = try await profiles.importVoiceSamples(pending.archive)
+            await reload()
+            onProfilesChanged?()
+            var parts: [String] = []
+            if !summary.added.isEmpty { parts.append("added \(Self.peopleCount(summary.added.count))") }
+            if !summary.replaced.isEmpty { parts.append("updated \(Self.peopleCount(summary.replaced.count))") }
+            voiceFileMessage = """
+                Imported \(Self.sampleCount(summary.sampleCount)): \(parts.joined(separator: " and ")). \
+                New recordings will recognize them from now on.
+                """
+        } catch {
+            errorMessage = Self.describe(error)
+        }
+    }
+
+    private static func peopleCount(_ count: Int) -> String {
+        count == 1 ? "1 person" : "\(count) people"
+    }
+
+    private static func sampleCount(_ count: Int) -> String {
+        count == 1 ? "1 voice sample" : "\(count) voice samples"
     }
 
     static func describe(_ error: Error) -> String {

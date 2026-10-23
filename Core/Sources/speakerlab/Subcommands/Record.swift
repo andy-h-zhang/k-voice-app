@@ -277,6 +277,11 @@ private final class RecordingSession: @unchecked Sendable {
             return "paused: writing to disk failed"
         case .resumed:
             return "resumed"
+        case .inputDeviceChanged(let name, let isFallback):
+            let device = name ?? "an unknown device"
+            return isFallback
+                ? "input switched to \(device) (the chosen device disconnected)"
+                : "input switched to \(device)"
         case .stopped:
             return nil                                  // reported in full below
         case .failed(let error):

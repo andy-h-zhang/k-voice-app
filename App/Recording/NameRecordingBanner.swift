@@ -16,33 +16,59 @@ import SwiftUI
 /// all mean the same thing as pressing Enter with whatever has been typed.
 /// That is also what makes it safe for transcription to wait on the name:
 /// nothing can leave a recording un-named and so un-transcribed.
+///
+/// ## Delete
+///
+/// The one way out that is not a name: a recording started by accident goes to
+/// the Trash before transcription ever sees it. That is why a focus loss commits
+/// after a short delay rather than at once. Clicking **Delete** can take focus
+/// from the field on the way, and an instant commit would start transcribing the
+/// very recording being thrown away. Delete clears the pending name first, so a
+/// delayed commit that lands afterwards finds nothing to name and does nothing.
 struct NameRecordingBanner: View {
 
     let pending: RecordingSessionModel.PendingName
     let commit: (String) -> Void
+    let discard: () -> Void
 
     @State private var draft: String = ""
     @FocusState private var focused: Bool
+
+    /// Long enough to cover a click on Delete (focus can leave on mouse-down,
+    /// the button fires on mouse-up); short enough that switching away still
+    /// names the recording before anyone notices.
+    private static let blurCommitDelay: Duration = .milliseconds(600)
 
     var body: some View {
         NoticeBanner(
             icon: "square.and.pencil",
             tint: .accentColor,
             title: "Name this recording",
-            message: "Press Return to keep just the date."
+            message: "Press Return to keep just the date, or delete it if you didn't mean to record."
         ) {
-            TextField("", text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .font(.body)
-                .frame(minWidth: 220)
-                .focused($focused)
-                .onSubmit { commit(draft) }
-                // Escape is not a cancel — see the type's note. Committing what
-                // is there beats leaving a recording called "2026-08-16 14.32.07".
-                .onExitCommand { commit(draft) }
-                .onChange(of: focused) { wasFocused, isFocused in
-                    if wasFocused, !isFocused { commit(draft) }
-                }
+            HStack(spacing: 8) {
+                TextField("", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.body)
+                    .frame(minWidth: 220)
+                    .focused($focused)
+                    .onSubmit { commit(draft) }
+                    // Escape is not a cancel — see the type's note. Committing what
+                    // is there beats leaving a recording called "2026-08-16 14.32.07".
+                    .onExitCommand { commit(draft) }
+                    .onChange(of: focused) { wasFocused, isFocused in
+                        guard wasFocused, !isFocused else { return }
+                        let typed = draft
+                        Task { @MainActor in
+                            try? await Task.sleep(for: Self.blurCommitDelay)
+                            // A no-op if Delete (or Return) already settled it.
+                            commit(typed)
+                        }
+                    }
+
+                Button("Delete", role: .destructive, action: discard)
+                    .help("Move this recording to the Trash without transcribing it")
+            }
         }
         .onAppear {
             draft = pending.seed
@@ -83,8 +109,10 @@ struct NameRecordingBanner: View {
 
 #Preview("Name this recording") {
     NameRecordingBanner(
-        pending: .init(id: UUID(), seed: "2026-08-16 ")
-    ) { _ in }
+        pending: .init(id: UUID(), seed: "2026-08-16 "),
+        commit: { _ in },
+        discard: {}
+    )
     .frame(width: 560)
     .padding()
 }

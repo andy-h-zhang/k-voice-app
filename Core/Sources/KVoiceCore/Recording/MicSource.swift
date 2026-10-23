@@ -33,8 +33,13 @@ public final class MicSource: AudioSource, @unchecked Sendable {
 
     /// UID of the input device to capture from, or `nil` for the system
     /// default. Honoured on macOS only; iOS routes input through
-    /// `AVAudioSession`.
-    public let inputDeviceUID: String?
+    /// `AVAudioSession`. Set at init and changed mid-recording by
+    /// ``switchInput(to:)``.
+    public var inputDeviceUID: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return preferredDeviceUID
+    }
 
     /// How long to wait for an answer to a microphone-access prompt before
     /// giving up. Generous by default (a user has to notice and click the
@@ -50,29 +55,43 @@ public final class MicSource: AudioSource, @unchecked Sendable {
     /// negligible over two hours, small enough for a responsive meter.
     private static let tapBufferSize: AVAudioFrameCount = 4096
 
-    /// How long to let a configuration change settle before deciding whether
-    /// capture survived it.
-    ///
-    /// Long enough for several tap buffers (~85 ms each) to have arrived if the
-    /// tap is still alive, short enough that a recording which really did stop
-    /// loses a fraction of a second rather than a meeting.
+    /// How long to let a configuration change settle before checking whether
+    /// capture survived it. The watchdog would notice anyway; this just makes
+    /// the response to a device switch quicker than one watchdog period.
     private static let configurationSettleDelay: TimeInterval = 0.3
 
-    /// How quiet the tap must have been to count as stopped.
+    /// How often the watchdog asks whether capture is still alive.
+    private static let watchdogInterval: TimeInterval = 0.5
+
+    /// How quiet an engine that *has* delivered audio must be to count as dead.
     ///
-    /// Comfortably more than one buffer period and comfortably less than
-    /// ``configurationSettleDelay``, so a live tap is never mistaken for a dead
-    /// one merely because a buffer was late.
-    private static let tapStaleThreshold: TimeInterval = 0.25
+    /// Generous on purpose. A 4096-frame tap buffer is ~85 ms at 48 kHz but
+    /// ~256 ms at the 16 kHz a Bluetooth headset mic runs at, and a live tap
+    /// judged dead gets torn down — which is how a working recording breaks.
+    private static let tapStaleThreshold: TimeInterval = 1.0
 
-    /// How many rebuilds in a row are attempted before the recording is paused
-    /// instead. A backstop, not the mechanism — see
-    /// ``recoverIfCaptureStalled()``.
-    private static let maxConsecutiveRecoveries = 6
+    /// How long a freshly started engine gets to deliver its first buffer
+    /// before it is judged dead.
+    ///
+    /// The built-in mic answers in ~100 ms. A Bluetooth headset switching from
+    /// its playback profile to its call profile (AirPods connecting mid-meeting
+    /// and becoming the default input) can take a few seconds, and rebuilding
+    /// during that time restarts the switch, so it never finishes.
+    private static let startupGrace: TimeInterval = 4.0
 
-    /// A rebuild more than this long after the previous one begins a fresh run,
-    /// resetting the count above.
-    private static let recoveryRunWindow: TimeInterval = 5
+    /// Longest wait between rebuild attempts while capture is down. Attempts
+    /// back off from 0.5 s up to this.
+    private static let maxRebuildBackoff: TimeInterval = 2.0
+
+    /// How long capture may stay down, while some input device still exists,
+    /// before the recording is paused and the user told. Rebuilds continue
+    /// after the pause, and the recording resumes on its own once audio flows.
+    private static let outagePauseAfter: TimeInterval = 8.0
+
+    /// The same, when no input device is connected at all. Short, but not zero:
+    /// unplugging the default device can leave the system briefly without one
+    /// before it picks the next.
+    private static let noDevicePauseAfter: TimeInterval = 1.5
 
     // MARK: - Streams
 
@@ -86,6 +105,8 @@ public final class MicSource: AudioSource, @unchecked Sendable {
 
     private let lock = UnfairLock()
     private var state: RecordingState = .idle
+    /// Backing for ``inputDeviceUID``.
+    private var preferredDeviceUID: String?
     private var engine: AVAudioEngine?
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
@@ -104,10 +125,36 @@ public final class MicSource: AudioSource, @unchecked Sendable {
     /// tore the graph down from one that merely announced itself.
     private var lastTapAt: TimeInterval = 0
 
-    /// Consecutive rebuilds, and when the run of them began — the backstop
-    /// against a rebuild that provokes the notification that triggered it.
-    private var recoveryCount = 0
-    private var recoveryRunStarted: TimeInterval = 0
+    /// Whether the current engine has delivered any buffer yet, and when it was
+    /// started. Together they let ``checkCapture()`` tell "still starting up"
+    /// apart from "dead" — see ``startupGrace``.
+    private var hasDelivered = false
+    private var captureStartedAt: TimeInterval = 0
+
+    /// When the current outage began (`nil` while capture is healthy), when
+    /// the next rebuild may be tried, and how many have been tried so far in
+    /// this outage — the backoff.
+    private var outageStartedAt: TimeInterval?
+    private var nextRebuildAt: TimeInterval = 0
+    private var rebuildAttempts = 0
+
+    /// Set when the recording was paused because there was no audio to
+    /// capture rather than by the user, so it can resume by itself once there
+    /// is.
+    private var pausedForDevice = false
+
+    /// Periodically runs ``checkCapture()`` on ``engineQueue`` while a file is
+    /// open.
+    private var watchdog: DispatchSourceTimer?
+
+    #if os(macOS)
+    /// UID of the device actually being captured, and whether that is the
+    /// system default standing in for a chosen device that went away. Compared
+    /// after each rebuild to decide whether to emit
+    /// ``RecordingEvent/inputDeviceChanged(name:isFallback:)``.
+    private var currentDeviceUID: String?
+    private var usingFallback = false
+    #endif
 
     /// Frames written and the rate they were written at — behind their *own*
     /// lock, not `lock`.
@@ -146,7 +193,7 @@ public final class MicSource: AudioSource, @unchecked Sendable {
     ///   - permissionRequestTimeout: Seconds to wait for an answer to the
     ///     microphone-access prompt.
     public init(inputDeviceUID: String? = nil, permissionRequestTimeout: TimeInterval = 60) {
-        self.inputDeviceUID = inputDeviceUID
+        self.preferredDeviceUID = inputDeviceUID
         self.permissionRequestTimeout = permissionRequestTimeout
 
         // Newest-value-only: a meter that falls behind should show "now",
@@ -169,6 +216,7 @@ public final class MicSource: AudioSource, @unchecked Sendable {
     /// bound. `removeTap` and `stop()` block until in-flight tap callbacks
     /// return, so doing them inline is a main-thread stall of unbounded length.
     deinit {
+        watchdog?.cancel()
         for token in observers { NotificationCenter.default.removeObserver(token) }
 
         let engineToStop = engine
@@ -247,7 +295,10 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         // and target with no converter between them should fail before a file is
         // created, not on the first buffer.
         let prepared = try await onEngineQueue { () -> (engine: AVAudioEngine, format: AVAudioFormat) in
-            let engine = try self.makeConfiguredEngine()
+            // No fallback at start: a chosen device that is missing before the
+            // recording begins is an error the user can see and fix, not a
+            // reason to quietly record from a different microphone.
+            let engine = try self.makeConfiguredEngine(allowFallback: false).engine
             guard let inputFormat = Self.usableInputFormat(of: engine.inputNode) else {
                 throw RecordingError.noInputDevice
             }
@@ -287,6 +338,12 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         self.recordedChannelCount = target.channelCount
         self.lastLevelEmit = 0
         self.lastTapAt = ProcessInfo.processInfo.systemUptime
+        self.hasDelivered = false
+        self.captureStartedAt = ProcessInfo.processInfo.systemUptime
+        self.outageStartedAt = nil
+        self.nextRebuildAt = 0
+        self.rebuildAttempts = 0
+        self.pausedForDevice = false
         self.state = .recording
         lock.unlock()
         counters.begin(sampleRate: target.sampleRate)
@@ -318,6 +375,17 @@ public final class MicSource: AudioSource, @unchecked Sendable {
             throw error
         }
 
+        lock.lock()
+        captureStartedAt = ProcessInfo.processInfo.systemUptime
+        lock.unlock()
+
+        startWatchdog()
+        #if os(macOS)
+        // Not awaited: naming the device walks the CoreAudio HAL, which is slow
+        // mid-bring-up, and nothing about starting depends on the answer.
+        engineQueue.async { [weak self] in self?.noteCurrentDevice(fellBack: false, announce: false) }
+        #endif
+
         emit(.started)
     }
 
@@ -344,51 +412,71 @@ public final class MicSource: AudioSource, @unchecked Sendable {
             lock.unlock()
             throw RecordingError.notPaused
         }
-        let engine = self.engine
         lock.unlock()
 
-        guard let engine else { throw RecordingError.notPaused }
-
-        // After a device change the tap was torn down and the device may be a
-        // different one, so capture is re-established from scratch — on the
-        // engine queue, ordered behind any recovery still in flight, and reading
-        // `tapInstalled` there rather than here so the answer cannot be stale by
-        // the time it is used.
+        // On the engine queue, ordered behind any recovery still in flight, and
+        // judging the engine's health there rather than here so the answer
+        // cannot be stale by the time it is used.
         try await onEngineQueue {
-            self.lock.lock()
-            let hadTap = self.tapInstalled
-            self.lock.unlock()
-
-            // A plain `pause()` left the tap installed and the engine running;
-            // there is nothing to rebuild, and rebuilding would only open a gap.
-            guard !hadTap || !engine.isRunning else { return }
-
-            self.lock.lock()
-            self.tapInstalled = false
-            self.lock.unlock()
-
-            // Replaced rather than restarted, for the same reason a recovery
-            // replaces it: an engine that has been through a configuration
-            // change misreports its input format, and `installTap` treats that
-            // as fatal. See ``makeConfiguredEngine()``.
-            self.removeObservers()
-            if hadTap { engine.inputNode.removeTap(onBus: 0) }
-            if engine.isRunning { engine.stop() }
-
-            let replacement = try self.makeConfiguredEngine()
-            self.lock.lock()
-            self.engine = replacement
-            self.lastTapAt = ProcessInfo.processInfo.systemUptime
-            self.lock.unlock()
-
-            self.registerObservers(for: replacement)
-            try self.beginCapture(on: replacement)
+            // A plain `pause()` left a live engine running; rebuilding it would
+            // only open a gap. Anything else — capture lost to a device change,
+            // or an engine that never came back — is rebuilt against whatever
+            // is connected now.
+            if !self.captureIsAlive(at: ProcessInfo.processInfo.systemUptime) {
+                try self.rebuildCapture()
+            }
         }
 
         lock.lock()
-        state = .recording
+        let resumed = state == .paused
+        if resumed {
+            state = .recording
+            pausedForDevice = false
+        }
         lock.unlock()
-        emit(.resumed)
+        if resumed { emit(.resumed) }
+    }
+
+    /// Moves capture to a different input device without ending the
+    /// recording: the audio keeps going into the same file, with a short gap
+    /// while the new device starts up.
+    ///
+    /// - Parameter uid: The device to record from, or `nil` for the system
+    ///   default.
+    /// - Throws: ``RecordingError/inputDeviceNotFound(uid:)`` if the device is
+    ///   not connected — checked *before* anything is torn down, so the
+    ///   recording carries on undisturbed on the device it was using. Other
+    ///   errors mean the new device would not start; the watchdog keeps
+    ///   retrying, as after any device change.
+    ///
+    /// Before `start()` this only changes which device `start()` will use;
+    /// after `stop()` it does nothing.
+    public func switchInput(to uid: String?) async throws {
+        try await onEngineQueue {
+            self.lock.lock()
+            let active = self.state == .recording || self.state == .paused
+            let unchanged = uid == self.preferredDeviceUID
+            if !active, self.state == .idle { self.preferredDeviceUID = uid }
+            self.lock.unlock()
+            guard active, !unchanged else { return }
+
+            #if os(macOS)
+            if let uid {
+                _ = try AudioDeviceManager.inputDevice(withUID: uid)
+            }
+            #endif
+
+            self.lock.lock()
+            self.preferredDeviceUID = uid
+            // A deliberate switch starts with a clean slate: no outage carried
+            // over from before, no backoff delaying the first retry.
+            self.outageStartedAt = nil
+            self.nextRebuildAt = 0
+            self.rebuildAttempts = 0
+            self.lock.unlock()
+
+            try self.rebuildCapture()
+        }
     }
 
     @discardableResult
@@ -420,8 +508,11 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         downmixSourceFormat = nil
         targetFormat = nil
         tapInstalled = false
+        let watchdogToCancel = watchdog
+        watchdog = nil
         lock.unlock()
 
+        watchdogToCancel?.cancel()
         removeObservers()
 
         // Outside the lock, because both calls block until in-flight tap
@@ -478,20 +569,6 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         }
     }
 
-    /// Records that a recovery is being attempted and answers whether there is
-    /// still budget for it — see ``maxConsecutiveRecoveries``.
-    private func claimRecoveryBudget() -> Bool {
-        let now = ProcessInfo.processInfo.systemUptime
-        lock.lock()
-        defer { lock.unlock() }
-        if now - recoveryRunStarted > Self.recoveryRunWindow {
-            recoveryRunStarted = now
-            recoveryCount = 0
-        }
-        recoveryCount += 1
-        return recoveryCount <= Self.maxConsecutiveRecoveries
-    }
-
     // MARK: - Capture
 
     /// Installs the capture tap, reading the format it must be installed with
@@ -538,22 +615,33 @@ public final class MicSource: AudioSource, @unchecked Sendable {
     ///
     /// Always new, never reused. `AVAudioEngine` caches the input node's format
     /// and does not reliably refresh it across a stop or a device re-select —
-    /// see ``recoverIfCaptureStalled()`` for what that costs — so an engine that
-    /// has been reconfigured is thrown away rather than talked round.
+    /// see ``rebuildCapture()`` for what that costs — so an engine that has been
+    /// reconfigured is thrown away rather than talked round.
     ///
+    /// - Parameter allowFallback: When the chosen device is no longer
+    ///   connected, return an engine on the system default instead of throwing
+    ///   `inputDeviceNotFound`. Mid-recording, a microphone that disappears
+    ///   should not end the meeting's audio.
+    /// - Returns: The engine, and whether it is the fallback.
     /// - Important: callers must be on ``engineQueue``.
-    private func makeConfiguredEngine() throws -> AVAudioEngine {
-        let engine = AVAudioEngine()
+    private func makeConfiguredEngine(allowFallback: Bool) throws -> (engine: AVAudioEngine, fellBack: Bool) {
         #if os(macOS)
         if let inputDeviceUID {
-            // Must precede reading the input format: the format follows the
-            // selected device. Throws `inputDeviceNotFound` when the chosen
-            // device really has gone away, which is the one case that should
-            // surface to the user.
-            try AudioDeviceManager.setInputDevice(uid: inputDeviceUID, on: engine)
+            let engine = AVAudioEngine()
+            do {
+                // Must precede reading the input format: the format follows the
+                // selected device.
+                try AudioDeviceManager.setInputDevice(uid: inputDeviceUID, on: engine)
+                return (engine, false)
+            } catch RecordingError.inputDeviceNotFound where allowFallback {
+                // A fresh engine rather than the one above, which may already
+                // have materialized its input node: an untouched engine follows
+                // the system default.
+                return (AVAudioEngine(), true)
+            }
         }
         #endif
-        return engine
+        return (AVAudioEngine(), false)
     }
 
     /// Installs the tap and starts the engine.
@@ -587,9 +675,9 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         lock.lock()
         // Stamped before the state guard, and stamped even while paused: this is
         // "a buffer arrived", not "a buffer was written". It is what
-        // ``recoverIfCaptureStalled()`` reads to decide whether a configuration
-        // change actually took the tap away.
+        // ``checkCapture()`` reads to decide whether capture is still alive.
         lastTapAt = now
+        hasDelivered = true
 
         let currentState = state
         guard currentState == .recording || currentState == .paused else {
@@ -907,7 +995,7 @@ public final class MicSource: AudioSource, @unchecked Sendable {
     ///
     /// The two are indistinguishable from the notification alone, and guessing
     /// wrong either way breaks a recording — so this does not guess. It waits a
-    /// beat and then asks capture itself, in ``recoverIfCaptureStalled()``.
+    /// beat and then asks capture itself, in ``checkCapture()``.
     private func handleConfigurationChange() {
         // Never inline. `AVAudioEngineConfigurationChange` is delivered
         // synchronously on whichever thread posted it — one of CoreAudio's own,
@@ -920,71 +1008,181 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         // Hopping to ``engineQueue`` returns the posting thread immediately and
         // orders the response behind whatever start, resume or stop provoked it.
         engineQueue.asyncAfter(deadline: .now() + Self.configurationSettleDelay) { [weak self] in
-            self?.recoverIfCaptureStalled()
+            self?.checkCapture()
         }
     }
 
-    /// Rebuilds capture if — and only if — the configuration change actually
-    /// stopped it.
+    // MARK: - Keeping capture alive
+
+    /// Starts the timer that runs ``checkCapture()`` for as long as a file is
+    /// open.
     ///
-    /// ## Why this is not simply "pause and tell the user"
+    /// A configuration-change notification is the usual sign that the device
+    /// changed, but it is not the only one, and a single check made 0.3 s after
+    /// it cannot follow a recovery that takes longer than that — a Bluetooth
+    /// headset coming up, or a rebuild that fails once and works on the next
+    /// try. The watchdog is what keeps trying.
+    private func startWatchdog() {
+        let timer = DispatchSource.makeTimerSource(queue: engineQueue)
+        timer.schedule(
+            deadline: .now() + Self.watchdogInterval,
+            repeating: Self.watchdogInterval,
+            leeway: .milliseconds(100)
+        )
+        timer.setEventHandler { [weak self] in self?.checkCapture() }
+
+        lock.lock()
+        let previous = watchdog
+        watchdog = timer
+        lock.unlock()
+
+        previous?.cancel()
+        timer.resume()
+    }
+
+    /// Whether the current engine is delivering audio, or is new enough that
+    /// it may still be about to.
     ///
-    /// That was the old behaviour, and it read routine bring-up as device loss.
-    /// Pointing the input node at a device — exactly what
-    /// ``AudioDeviceManager/setInputDevice(uid:on:)`` does to
-    /// `kAudioOutputUnitProperty_CurrentDevice` — makes CoreAudio post this
-    /// notification a moment either side of `engine.start()` returning, **every
-    /// time**. Measured, not guessed: recording from `BuiltInMicrophoneDevice`
-    /// while it was already the system default still produced it. So every
-    /// recording made with a *chosen* input device rather than the system
-    /// default auto-paused within a second of starting and captured zero
-    /// frames, and pressing Resume restarted the engine and provoked it again.
-    /// That is the failure people hit on their machine and nowhere else: the
-    /// trigger is not the hardware, it is whether the input picker has ever
-    /// been touched.
+    /// - Important: takes `lock`, so callers must not hold it.
+    private func captureIsAlive(at now: TimeInterval) -> Bool {
+        let running = currentEngineIsRunning()
+        lock.lock()
+        defer { lock.unlock() }
+        return captureIsAliveLocked(at: now, engineRunning: running)
+    }
+
+    /// Whether the current engine is running, asked *outside* `lock`: the tap
+    /// callback takes `lock`, so calling into the engine while holding it is
+    /// asking for a lock-order inversion.
     ///
-    /// ## Why it is not simply "always rebuild" either
+    /// - Important: callers must be on ``engineQueue`` — the only place the
+    ///   engine is replaced — so the answer still describes the current engine
+    ///   when the caller next takes `lock`.
+    private func currentEngineIsRunning() -> Bool {
+        lock.lock()
+        let current = engine
+        lock.unlock()
+        return current?.isRunning ?? false
+    }
+
+    /// ``captureIsAlive(at:)`` for callers already holding `lock`.
     ///
-    /// Because a rebuild restarts the engine, and a restart posts the
-    /// notification, which would rebuild again — forever. And because the
-    /// notification really does sometimes arrive with the tap alive and well,
-    /// where a rebuild is a needless gap in the audio.
+    /// `engineRunning` matters because an engine that a configuration change
+    /// stopped is dead now, not after ``tapStaleThreshold`` of silence:
+    /// `AVAudioEngine` stops itself when the device under it changes, so this
+    /// is what keeps the gap in the audio short.
+    private func captureIsAliveLocked(at now: TimeInterval, engineRunning: Bool) -> Bool {
+        guard engine != nil, engineRunning, tapInstalled else { return false }
+        if hasDelivered { return now - lastTapAt <= Self.tapStaleThreshold }
+        return now - captureStartedAt <= Self.startupGrace
+    }
+
+    /// Keeps capture running across device changes: does nothing while audio
+    /// is arriving, rebuilds capture when it is not, and pauses the recording
+    /// only when the outage has gone on too long to hide.
     ///
-    /// ## What it does instead
+    /// ## Why not "pause and tell the user" on the first sign of trouble
     ///
-    /// Asks capture whether it is still running. ``lastTapAt`` is stamped by
-    /// every tap callback, so after a settling delay the answer is a fact rather
-    /// than an inference: buffers still arriving means the graph survived and
-    /// there is nothing to do; silence means it did not, whatever the cause, and
-    /// capture is rebuilt. Self-limiting by construction — a rebuild that works
-    /// makes the next notification a no-op.
+    /// Because the first sign of trouble is routine. Pointing the input node at
+    /// a device posts a configuration change a moment either side of
+    /// `engine.start()` returning, **every time** — measured, not guessed. And a
+    /// real device switch is messy: the new default may report zero channels
+    /// for a moment, `engine.start()` may fail while it settles, and a Bluetooth
+    /// headset may take seconds to deliver its first buffer. Each of those used
+    /// to end in a pause. Now each is just another attempt.
     ///
-    /// The rebuild is onto a **fresh** `AVAudioEngine`. A reconfigured one keeps
-    /// reporting its old input format: after `engine.stop()` and a re-select of
-    /// the same device, `outputFormat(forBus: 0)` still read the previous
-    /// device's 44.1 kHz, and installing a tap with a format the bus disagrees
-    /// with raises an `NSException` — which Swift cannot catch and which
-    /// terminates the app.
+    /// ## Why not "always rebuild" either
     ///
-    /// - Important: runs on ``engineQueue``, and must, because it takes the
-    ///   graph apart and puts a new one in its place.
-    private func recoverIfCaptureStalled() {
+    /// A rebuild restarts the engine, a restart posts the notification, and the
+    /// notification would rebuild again — forever. And it sometimes arrives
+    /// with the tap alive and well, where a rebuild is a needless gap. So the
+    /// question asked is a fact, not an inference: has this engine delivered
+    /// audio recently (``tapStaleThreshold``), or is it young enough that it may
+    /// still be about to (``startupGrace``)? Only "no" leads to a rebuild, and
+    /// rebuilds back off (``maxRebuildBackoff``).
+    ///
+    /// ## When it does pause
+    ///
+    /// When capture has been down for ``outagePauseAfter`` — or for
+    /// ``noDevicePauseAfter`` when there is no input device at all. The file is
+    /// intact, rebuilding carries on in the background, and the first buffer
+    /// that arrives resumes the recording by itself.
+    ///
+    /// - Important: runs on ``engineQueue``, and must, because it may take the
+    ///   graph apart and put a new one in its place.
+    private func checkCapture() {
         let now = ProcessInfo.processInfo.systemUptime
+        let engineRunning = currentEngineIsRunning()
 
         lock.lock()
         guard state == .recording || state == .paused else {
             lock.unlock()
             return
         }
-        // Buffers are still arriving: the notification was the engine talking
-        // about itself, not the device going away.
-        guard now - lastTapAt > Self.tapStaleThreshold else {
+
+        if captureIsAliveLocked(at: now, engineRunning: engineRunning) {
+            // Still inside the start-up grace counts as alive — leave it alone —
+            // but only a delivered buffer ends the outage.
+            guard hasDelivered else {
+                lock.unlock()
+                return
+            }
+            outageStartedAt = nil
+            rebuildAttempts = 0
+            nextRebuildAt = 0
+            let autoResume = pausedForDevice && state == .paused
+            if autoResume {
+                state = .recording
+                pausedForDevice = false
+            }
             lock.unlock()
+            if autoResume { emit(.resumed) }
             return
         }
-        let oldEngine = engine
-        let hadTap = tapInstalled
-        tapInstalled = false
+
+        let outageStart = outageStartedAt ?? now
+        outageStartedAt = outageStart
+        let rebuildDue = now >= nextRebuildAt
+        if rebuildDue {
+            rebuildAttempts += 1
+            let backoff = 0.5 * pow(2, Double(min(rebuildAttempts - 1, 4)))
+            nextRebuildAt = now + min(backoff, Self.maxRebuildBackoff)
+        }
+        lock.unlock()
+
+        var rebuildFailed = false
+        if rebuildDue {
+            do {
+                try rebuildCapture()
+            } catch {
+                rebuildFailed = true
+            }
+        }
+
+        let outage = now - outageStart
+        let shouldPause = outage >= Self.outagePauseAfter
+            || (rebuildFailed && outage >= Self.noDevicePauseAfter && !Self.anyInputDeviceConnected())
+        if shouldPause { pauseForMissingInput() }
+    }
+
+    /// Replaces the engine with a new one on the chosen device — or, if that
+    /// device has gone, on the system default — and starts capturing from it.
+    ///
+    /// The replacement is a **fresh** `AVAudioEngine`. A reconfigured one keeps
+    /// reporting its old input format: after `engine.stop()` and a re-select of
+    /// the same device, `outputFormat(forBus: 0)` still read the previous
+    /// device's 44.1 kHz, and installing a tap with a format the bus disagrees
+    /// with raises an `NSException` — which Swift cannot catch and which
+    /// terminates the app.
+    ///
+    /// On failure the old engine is already gone and no new one is left
+    /// behind; the next ``checkCapture()`` tries again.
+    ///
+    /// - Important: callers must be on ``engineQueue``.
+    private func rebuildCapture() throws {
+        tearDownEngine()
+
+        lock.lock()
         // The hardware format may have changed; force a rebuild of both.
         converter = nil
         converterInputFormat = nil
@@ -992,46 +1190,116 @@ public final class MicSource: AudioSource, @unchecked Sendable {
         downmixSourceFormat = nil
         lock.unlock()
 
-        // The old engine's notifications are of no further interest, and its
-        // token is about to be replaced.
+        let (engine, fellBack) = try makeConfiguredEngine(allowFallback: true)
+
+        lock.lock()
+        // A `stop()` may have taken ownership while this was queued.
+        guard state == .recording || state == .paused else {
+            lock.unlock()
+            return
+        }
+        self.engine = engine
+        hasDelivered = false
+        captureStartedAt = ProcessInfo.processInfo.systemUptime
+        lock.unlock()
+
+        registerObservers(for: engine)
+        do {
+            try beginCapture(on: engine)
+        } catch {
+            tearDownEngine()
+            throw error
+        }
+
+        lock.lock()
+        // From when the engine is actually running: `start()` can block for a
+        // while, and that time is not the device's to account for.
+        captureStartedAt = ProcessInfo.processInfo.systemUptime
+        let stillActive = state == .recording || state == .paused
+        lock.unlock()
+
+        // `stop()` ran while this engine was starting and saw no tap to remove.
+        guard stillActive else {
+            if engine.isRunning { engine.stop() }
+            return
+        }
+
+        #if os(macOS)
+        noteCurrentDevice(fellBack: fellBack, announce: true)
+        #endif
+    }
+
+    /// Detaches and stops the current engine, if there is one.
+    ///
+    /// - Important: callers must be on ``engineQueue``.
+    private func tearDownEngine() {
+        lock.lock()
+        let oldEngine = engine
+        let hadTap = tapInstalled
+        engine = nil
+        tapInstalled = false
+        lock.unlock()
+
+        // The old engine's notifications are of no further interest.
         removeObservers()
         if hadTap { oldEngine?.inputNode.removeTap(onBus: 0) }
         if oldEngine?.isRunning == true { oldEngine?.stop() }
+    }
 
-        do {
-            guard claimRecoveryBudget() else {
-                throw RecordingError.inputDeviceDisconnected
-            }
-            let engine = try makeConfiguredEngine()
+    /// Pauses a recording that has had no audio for too long, marking the
+    /// pause as one the source may end by itself.
+    private func pauseForMissingInput() {
+        lock.lock()
+        let wasRecording = state == .recording
+        if wasRecording {
+            state = .paused
+            pausedForDevice = true
+        }
+        lock.unlock()
 
-            lock.lock()
-            // Re-check: a `stop()` may have been queued behind this block's
-            // teardown and taken ownership in the meantime.
-            guard state == .recording || state == .paused else {
-                lock.unlock()
-                return
-            }
-            self.engine = engine
-            // Stamped so the notification this rebuild is about to provoke does
-            // not find a tap that has not had time to deliver anything yet.
-            lastTapAt = ProcessInfo.processInfo.systemUptime
-            lock.unlock()
-
-            registerObservers(for: engine)
-            try beginCapture(on: engine)
-        } catch {
-            // Nothing to capture from, or the graph will not settle. Pause
-            // rather than tear down: everything already written is a valid file,
-            // and `resume()` rebuilds against whatever is connected by then.
-            lock.lock()
-            let wasRecording = state == .recording
-            if wasRecording { state = .paused }
-            lock.unlock()
-
-            if wasRecording { emit(.paused(.deviceLost)) }
+        if wasRecording {
+            emit(.paused(.deviceLost))
             emit(.failed(.inputDeviceDisconnected))
         }
     }
+
+    /// Whether any input device is connected at all — the difference between
+    /// "the switch is taking a while" and "there is nothing to switch to".
+    private static func anyInputDeviceConnected() -> Bool {
+        #if os(macOS)
+        // An unreadable list is not evidence of an empty one.
+        guard let devices = try? AudioDeviceManager.inputDevices() else { return true }
+        return !devices.isEmpty
+        #else
+        return true
+        #endif
+    }
+
+    #if os(macOS)
+    /// Records which device is being captured now and, when `announce` is set
+    /// and it differs from before, says so through ``events``.
+    ///
+    /// - Important: callers must be on ``engineQueue`` — this walks the HAL.
+    private func noteCurrentDevice(fellBack: Bool, announce: Bool) {
+        let device: AudioInputDevice?
+        if let inputDeviceUID, !fellBack {
+            device = try? AudioDeviceManager.inputDevice(withUID: inputDeviceUID)
+        } else {
+            device = try? AudioDeviceManager.defaultInputDevice()
+        }
+
+        lock.lock()
+        let changed = device?.uid != currentDeviceUID || fellBack != usingFallback
+        currentDeviceUID = device?.uid
+        usingFallback = fellBack
+        let active = state == .recording || state == .paused
+        lock.unlock()
+
+        if announce, changed, active {
+            emit(.inputDeviceChanged(name: device?.name, isFallback: fellBack))
+        }
+    }
+    #endif
 
     #if os(iOS)
     private func handleInterruption(_ notification: Notification) {

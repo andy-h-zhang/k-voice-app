@@ -46,7 +46,10 @@ struct PeopleView: View {
 
     var body: some View {
         splitOrEmptyState
-            .toolbar { addPersonToolbarItem }
+            .toolbar {
+                voiceSamplesToolbarItem
+                addPersonToolbarItem
+            }
             .task { await model.reload() }
             .sheet(item: $enrollment) { request in
                 EnrollmentView(request: request) { result in
@@ -61,6 +64,8 @@ struct PeopleView: View {
                 enrollment = .guided(for: person)
             }))
             .modifier(ResetLearnedConfirmation(person: $confirmingReset))
+            .modifier(VoiceSampleImportConfirmation())
+            .modifier(VoiceFileResultAlert())
     }
 
     // MARK: - Body pieces
@@ -77,7 +82,8 @@ struct PeopleView: View {
         } else if model.isEmpty {
             PeopleEmptyState(
                 onEnroll: { enrollment = .guided(for: nil) },
-                onImport: { enrollment = .clips(for: nil) }
+                onImport: { enrollment = .clips(for: nil) },
+                onImportVoiceSamples: { Task { await model.chooseVoiceSamplesToImport() } }
             )
         } else {
             // An `HStack` and a `Divider`, not an `HSplitView`.
@@ -114,6 +120,26 @@ struct PeopleView: View {
         }
     }
 
+    /// Moving people's voices between copies of KVoice, so a second install
+    /// recognizes the same people the way this one does.
+    @ToolbarContentBuilder
+    private var voiceSamplesToolbarItem: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Button("Export All Voice Samples…") {
+                    Task { await model.exportVoiceSamples() }
+                }
+                .disabled(!model.people.contains(where: \.hasVoice))
+                Button("Import Voice Samples…") {
+                    Task { await model.chooseVoiceSamplesToImport() }
+                }
+            } label: {
+                Label("Voice Samples", systemImage: "square.and.arrow.up.on.square")
+            }
+            .help("Export voice samples to another copy of KVoice, or import them from one")
+        }
+    }
+
     @ToolbarContentBuilder
     private var addPersonToolbarItem: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
@@ -143,6 +169,10 @@ struct PeopleView: View {
                 .contextMenu {
                     Button("Record a Voice…") { enrollment = .guided(for: person) }
                     Button("Add from Audio Files…") { enrollment = .clips(for: person) }
+                    Button("Export Voice Samples…") {
+                        Task { await model.exportVoiceSamples(only: person) }
+                    }
+                    .disabled(!person.hasVoice)
                     Divider()
                     Button("Delete…", role: .destructive) { confirmingDelete = person }
                 }
@@ -225,6 +255,68 @@ private struct PeopleErrorAlert: ViewModifier {
                 set: { if !$0 { services.people.errorMessage = nil } }
             ),
             presenting: services.people.errorMessage
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
+        }
+    }
+}
+
+/// Says who an import will add and whose voice samples it will replace, before
+/// anything changes. Replacing is the part worth stopping for: a person already
+/// here loses whatever their voice had learned on this machine.
+private struct VoiceSampleImportConfirmation: ViewModifier {
+
+    @Environment(AppServices.self) private var services
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Import voice samples from “\(services.people.pendingImport?.fileName ?? "this file")”?",
+            isPresented: Binding(
+                get: { services.people.pendingImport != nil },
+                set: { if !$0 { services.people.pendingImport = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: services.people.pendingImport
+        ) { _ in
+            Button("Import") {
+                Task { await services.people.confirmImport() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { pending in
+            Text(Self.impact(of: pending.preview))
+        }
+    }
+
+    static func impact(of preview: VoiceSampleImportSummary) -> String {
+        var lines: [String] = []
+        if !preview.added.isEmpty {
+            lines.append("New: \(preview.added.joined(separator: ", ")).")
+        }
+        if !preview.replaced.isEmpty {
+            lines.append("""
+                Already here: \(preview.replaced.joined(separator: ", ")). Their voice samples \
+                will be replaced with the file's. Transcripts that name them are kept.
+                """)
+        }
+        return lines.joined(separator: "\n\n")
+    }
+}
+
+/// Confirms a finished export or import.
+private struct VoiceFileResultAlert: ViewModifier {
+
+    @Environment(AppServices.self) private var services
+
+    func body(content: Content) -> some View {
+        content.alert(
+            "Voice Samples",
+            isPresented: Binding(
+                get: { services.people.voiceFileMessage != nil },
+                set: { if !$0 { services.people.voiceFileMessage = nil } }
+            ),
+            presenting: services.people.voiceFileMessage
         ) { _ in
             Button("OK", role: .cancel) {}
         } message: { message in
@@ -394,6 +486,7 @@ struct PeopleEmptyState: View {
 
     let onEnroll: () -> Void
     let onImport: () -> Void
+    let onImportVoiceSamples: () -> Void
 
     // The two cards, either side by side or stacked. `ViewThatFits` picks the
     // first arrangement that fits the width it is given, which in this window
@@ -476,6 +569,15 @@ struct PeopleEmptyState: View {
                 }
 
                 cards
+
+                // Where a fresh install lands, so this is where someone handed
+                // a voice-samples file will look for what to do with it.
+                VStack(spacing: 8) {
+                    Text("Have a voice-samples file from another copy of KVoice?")
+                        .foregroundStyle(.secondary)
+                    Button("Import Voice Samples…", action: onImportVoiceSamples)
+                }
+                .font(.callout)
             }
             .padding(40)
             .frame(maxWidth: .infinity)

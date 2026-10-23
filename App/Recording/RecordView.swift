@@ -43,12 +43,32 @@ struct RecordView: View {
                         message: notice
                     )
                 }
+                if let deviceNotice = session.deviceNotice {
+                    NoticeBanner(
+                        icon: "mic.fill",
+                        tint: .blue,
+                        title: "Switched microphone",
+                        message: deviceNotice
+                    )
+                }
                 if session.permission == .denied {
                     microphoneDeniedBanner
                 }
                 if let pending = session.pendingName {
-                    NameRecordingBanner(pending: pending) { typed in
-                        session.commitName(typed)
+                    NameRecordingBanner(
+                        pending: pending,
+                        commit: { typed in session.commitName(typed, for: pending.id) },
+                        discard: { session.discardPendingRecording() }
+                    )
+                }
+                if session.didDiscardRecording {
+                    NoticeBanner(
+                        icon: "trash",
+                        tint: .secondary,
+                        title: "Recording deleted",
+                        message: ""
+                    ) {
+                        Button("Dismiss") { session.dismissDiscardConfirmation() }
                     }
                 }
                 if let saved = session.lastSaved {
@@ -226,12 +246,11 @@ struct RecordView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .disabled(session.isActive)
         .font(.callout)
         .foregroundStyle(.secondary)
         .help(
             session.isActive
-                ? "A recording keeps the device it started on. Stop it to switch inputs."
+                ? "Switch microphones without stopping. The recording continues in the same file."
                 : "Choose which microphone the next recording uses."
         )
         .task { await session.refreshInputDevices() }
@@ -418,10 +437,13 @@ struct NoticeBanner<Accessory: View>: View {
             Text(title)
                 .font(.subheadline)
                 .fontWeight(.semibold)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // An empty message means a title-only banner, not a blank line.
+            if !message.isEmpty {
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         // Without a stated ideal, the paragraph's ideal width is the whole
         // string on one line, `ViewThatFits` never judges the side-by-side

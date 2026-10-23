@@ -63,6 +63,12 @@ criterion; **[P2]**–**[P7]** = a visual check that phase's work left behind.
       the resume. **[P2]**
 - [ ] Record a second short clip and quit mid-recording with **Stop and Quit**:
       the file is finalized, not truncated garbage — it opens and plays. **[P4]**
+- [ ] Record a few seconds, **Stop**, and click **Delete** in the "Name this
+      recording" banner. A "Recording deleted" banner appears, the row is gone
+      from Recordings, its folder is in the Trash, and no transcription job ever
+      starts (nothing appears as transcribing, and AssemblyAI shows no upload).
+- [ ] Record again, Stop, then click somewhere else instead of naming it. It
+      is still named with the date and transcribed, as before.
 
 ## C. Rename, delete, and Finder parity — [Spec] [P2] [P4]
 
@@ -126,6 +132,17 @@ criterion; **[P2]**–**[P7]** = a visual check that phase's work left behind.
       enrollment. It must fail with "The voice models aren't available" and a
       **Show Model Folder** button — not hang and not crash. Restore Wi-Fi and
       let it re-download. **[P6]**
+- [ ] **Voice Samples ▸ Export All Voice Samples…** saves a `.kvoicevoices`
+      file and reports how many people and samples it holds. Right-click one
+      person ▸ **Export Voice Samples…** saves just them (disabled for someone
+      with no voice).
+- [ ] On a second Mac (or after deleting the people), **Import Voice
+      Samples…** from the empty People screen: the confirmation lists who is
+      new, the people appear with the same sample counts, and a new recording
+      names them just as the original Mac does.
+- [ ] Import the same file where one of the people already exists: the
+      confirmation says their samples will be replaced, and afterwards their
+      transcripts still name them.
 
 ## F. Full pipeline with a key: record → transcribe → auto-name — [Spec] [P4]
 
@@ -319,9 +336,23 @@ stopped redrawing. Re-walk all of this after any change to `MicSource`,
       whatever device is there now, in the same file and with the clock running
       on — recovery is automatic and silent. The paused/device-changed banner is
       now only for the case below.
-- [ ] Unplug the *only* input device mid-recording. **Now** the banner appears,
-      the window stays responsive, and **Resume** works once something is
-      plugged back in.
+- [ ] Unplug the *only* input device mid-recording. **Now** the banner appears
+      (within ~2 s), the window stays responsive, and plugging something back
+      in resumes the recording **by itself** (Resume also works).
+- [ ] With **System default** selected, connect AirPods (or any Bluetooth
+      headset) mid-recording so they become the default input. Recording keeps
+      going on them after a gap of a few seconds at most, with no paused banner,
+      and the device label under the record button changes to the headset.
+      Switch the default input back in Control Center: same again.
+- [ ] **While recording**, open the input picker under the record button. It is
+      enabled. Pick a different microphone: the recording keeps running (clock
+      keeps counting after a short gap), the label shows the new device, and
+      the saved file has audio from both. Changing the input in Settings while
+      recording does the same.
+- [ ] Choose a **specific** USB/Bluetooth mic, start recording, then unplug it.
+      Recording continues on the system default, a blue "Switched microphone"
+      banner says so, and the label shows the new device. The saved file has
+      audio from both mics.
 
 ---
 

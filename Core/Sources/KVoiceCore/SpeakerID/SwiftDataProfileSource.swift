@@ -360,6 +360,133 @@ public actor SwiftDataProfileSource: ProfileLearningSource {
         }
     }
 
+    // MARK: - Voice-sample files
+
+    /// Everyone with at least one voice sample, as a file another KVoice can
+    /// import.
+    ///
+    /// People with no samples are left out: a name alone recognizes nobody,
+    /// and importing one would only clutter the other list.
+    ///
+    /// - Parameter personIDs: Limit the file to these people; `nil` for
+    ///   everyone.
+    /// - Throws: ``VoiceSampleArchiveError/nothingToExport`` when nobody
+    ///   selected has a voice.
+    public func exportVoiceSamples(
+        personIDs: Set<UUID>? = nil,
+        at date: Date = Date()
+    ) async throws -> VoiceSampleArchive {
+        let people = try withContext { context in
+            try context.fetch(
+                FetchDescriptor<Person>(sortBy: [SortDescriptor(\.createdAt), SortDescriptor(\.name)])
+            )
+            .filter { personIDs?.contains($0.id) ?? true }
+            .map(\.profile)
+            .filter { $0.embeddingCount > 0 }
+        }
+        guard !people.isEmpty else { throw VoiceSampleArchiveError.nothingToExport }
+        return VoiceSampleArchive(people: people, exportedAt: date)
+    }
+
+    /// What ``importVoiceSamples(_:)`` would do, without doing it — so the user
+    /// can be told who will be added and whose samples replaced before
+    /// anything changes.
+    public func previewImport(_ archive: VoiceSampleArchive) async throws -> VoiceSampleImportSummary {
+        try withContext { context in
+            try Self.importVoiceSamples(archive, into: context, apply: false)
+        }
+    }
+
+    /// Brings a file's people into this library, in one save.
+    ///
+    /// - A name not already here becomes a new person.
+    /// - A name already here (case-insensitively, the same rule as everywhere
+    ///   else) keeps its row — and so every transcript already assigned to
+    ///   it — but its voice samples are **replaced** by the file's. Replaced,
+    ///   not merged: the reason to import is to recognize people exactly as
+    ///   the exporting install does, and a blend with whatever was here would
+    ///   be neither.
+    ///
+    /// Each person keeps at most ``ProfileFoldPolicy/defaultCap`` samples, the
+    /// newest, and every vector is re-normalized on the way in exactly as a
+    /// fold-in would.
+    ///
+    /// - Throws: ``VoiceSampleArchiveError/nothingToImport`` when the file
+    ///   holds nobody with a usable voice sample.
+    @discardableResult
+    public func importVoiceSamples(_ archive: VoiceSampleArchive) async throws -> VoiceSampleImportSummary {
+        try withContext { context in
+            try Self.importVoiceSamples(archive, into: context, apply: true)
+        }
+    }
+
+    private static func importVoiceSamples(
+        _ archive: VoiceSampleArchive,
+        into context: ModelContext,
+        apply: Bool
+    ) throws -> VoiceSampleImportSummary {
+        var summary = VoiceSampleImportSummary()
+        var seen = Set<String>()
+
+        for profile in archive.people {
+            let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            // A file listing one name twice is taken at its first entry.
+            guard seen.insert(ModelContext.nameKey(name)).inserted, !name.isEmpty else { continue }
+
+            let samples = profile.embeddings
+                .suffix(ProfileFoldPolicy.defaultCap)
+                .compactMap { embedding in
+                    Self.importableVector(embedding.vector).map { (embedding, $0) }
+                }
+            guard !samples.isEmpty else { continue }
+
+            let existing = try context.person(named: name)
+            if let existing {
+                summary.replaced.append(existing.name)
+            } else {
+                summary.added.append(name)
+            }
+            summary.sampleCount += samples.count
+            guard apply else { continue }
+
+            let person: Person
+            if let existing {
+                for embedding in existing.embeddings { context.delete(embedding) }
+                person = existing
+            } else {
+                person = Person(name: name, createdAt: profile.createdAt)
+                context.insert(person)
+            }
+            for (embedding, vector) in samples {
+                person.embeddingSequence += 1
+                let row = PersonEmbedding(
+                    vector: vector,
+                    addedAt: embedding.addedAt,
+                    source: embedding.source,
+                    sequence: person.embeddingSequence
+                )
+                context.insert(row)
+                person.embeddings.append(row)
+            }
+        }
+
+        guard !summary.isEmpty else { throw VoiceSampleArchiveError.nothingToImport }
+        return summary
+    }
+
+    /// A file's vector as it should be stored, or nil if it is unusable.
+    ///
+    /// An exported vector was already normalized when it was first stored, and
+    /// normalizing it again nudges its last bits — harmless to matching, but
+    /// then the copy is not *the same* profile. So a vector that is already
+    /// unit length is kept exactly; anything else gets the usual fold-in
+    /// treatment.
+    private static func importableVector(_ vector: [Float]) -> [Float]? {
+        guard !vector.isEmpty, vector.allSatisfy(\.isFinite) else { return nil }
+        if abs(VectorMath.l2Norm(vector) - 1) < 1e-4 { return vector }
+        return ProfileFoldPolicy.storableVector(vector)
+    }
+
     // MARK: - Implementation
 
     /// Runs `body` against a fresh context and saves once.

@@ -116,7 +116,9 @@ public struct RecordingSummary: Sendable, Equatable {
 public enum PauseReason: Sendable, Equatable {
     /// `pause()` was called.
     case user
-    /// The input device went away or the engine reconfigured itself.
+    /// No audio could be captured for several seconds — typically no input
+    /// device is connected. Device switches the source can follow do not pause.
+    /// The source keeps trying and resumes by itself when audio returns.
     case deviceLost
     /// The system interrupted capture (iOS audio session interruption).
     case interrupted
@@ -130,8 +132,14 @@ public enum RecordingEvent: Sendable, Equatable {
     case started
     /// Capture suspended. The file stays open and valid.
     case paused(PauseReason)
-    /// Capture resumed after a pause.
+    /// Capture resumed after a pause — by `resume()`, or by itself once audio
+    /// returned after a ``PauseReason/deviceLost`` pause.
     case resumed
+    /// Capture moved to a different input device mid-recording, in the same
+    /// file. `name` is the device now being recorded (`nil` if it could not be
+    /// read); `isFallback` is true when the chosen device disappeared and the
+    /// system default took its place.
+    case inputDeviceChanged(name: String?, isFallback: Bool)
     /// Capture stopped and the file was finalized.
     case stopped(RecordingSummary)
     /// A failure occurred. Anything already written stays valid; recovery is

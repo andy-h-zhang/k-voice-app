@@ -88,6 +88,11 @@ final class RecordingSessionModel {
     /// disk write failed) — the recording is paused but intact.
     private(set) var notice: String?
 
+    /// Set when the chosen microphone disappeared mid-recording and capture
+    /// carried on from the system default instead. Informational: the
+    /// recording never stopped. Cleared when the next recording starts.
+    private(set) var deviceNotice: String?
+
     /// A failure that stopped something happening.
     var errorMessage: String?
 
@@ -108,6 +113,11 @@ final class RecordingSessionModel {
         /// prefix the user is stuck with.
         let seed: String
     }
+
+    /// True right after ``discardPendingRecording()`` threw a recording away,
+    /// so the record screen can say where it went. Cleared by the next
+    /// recording or by dismissing it.
+    private(set) var didDiscardRecording = false
 
     /// The row written by the last completed recording, once it has a name.
     private(set) var lastSaved: SavedRecording?
@@ -186,16 +196,19 @@ final class RecordingSessionModel {
         }
     }
 
-    /// Chooses the input for the *next* recording (and for voice enrollment).
+    /// Chooses the input — for the recording in progress, if there is one, and
+    /// for every recording (and voice enrollment) after it.
     ///
-    /// Deliberately not applied to a recording already running: `MicSource`
-    /// binds its device when the engine starts, and swapping underneath it
-    /// would mean stopping and restarting capture — which is a second file, not
-    /// a settings change. The picker says so by being disabled while recording.
+    /// A running recording moves to the new device in the same file, with a
+    /// short gap while the device starts. The device can also change without
+    /// the user — the system default switching, or the chosen device being
+    /// unplugged — and `MicSource` follows that too, reporting it as
+    /// `.inputDeviceChanged`.
     func selectInputDevice(uid: String?) {
         settings.inputDeviceUID = uid
         selectedDeviceUID = uid
         onInputDeviceChanged?()
+        applyInputToActiveRecording(uid: uid)
         Task { await refreshInputDevice() }
     }
 
@@ -205,9 +218,38 @@ final class RecordingSessionModel {
     var onInputDeviceChanged: (() -> Void)?
 
     /// Picks the setting up again after it was changed somewhere else — the
-    /// Settings window has the same control.
+    /// Settings window has the same control — and applies it to a recording in
+    /// progress. A no-op for the recording when the device is unchanged, which
+    /// is the common case: this also runs every time the record view appears.
     func syncInputChoiceFromSettings() {
         selectedDeviceUID = settings.inputDeviceUID
+        applyInputToActiveRecording(uid: settings.inputDeviceUID)
+    }
+
+    /// Moves a running recording to `uid`. The label under the record button
+    /// follows via `.inputDeviceChanged`, once the new device is actually in use.
+    private func applyInputToActiveRecording(uid: String?) {
+        guard isActive, let source else { return }
+        // An explicit choice replaces any "your mic disconnected" note.
+        deviceNotice = nil
+        Task {
+            do {
+                try await source.switchInput(to: uid)
+            } catch RecordingError.inputDeviceNotFound {
+                // Checked before anything was torn down: nothing changed.
+                errorMessage = """
+                    That input is not connected. Recording continues on \
+                    \(deviceName ?? "the previous input").
+                    """
+            } catch {
+                // The old device is already released; MicSource keeps retrying
+                // the new one, and pauses with a notice only if it never starts.
+                errorMessage = """
+                    The new input did not start: \(Self.describe(error)) \
+                    KVoice will keep trying it.
+                    """
+            }
+        }
     }
 
     private func refreshPermission() {
@@ -260,7 +302,9 @@ final class RecordingSessionModel {
 
         errorMessage = nil
         notice = nil
+        deviceNotice = nil
         lastSaved = nil
+        didDiscardRecording = false
         pendingName = nil
         elapsed = 0
         elapsedSeconds = 0
@@ -493,9 +537,14 @@ final class RecordingSessionModel {
     ///
     /// Idempotent, because the field commits on Enter *and* on losing focus,
     /// and pressing Enter takes focus away.
+    ///
+    /// - Parameter id: The recording the name is for. The field's focus-loss
+    ///   commit is delayed, so by the time it lands the pending recording may
+    ///   be a different one, or none; a name meant for another recording is
+    ///   dropped.
     @discardableResult
-    func commitName(_ typed: String) -> UUID? {
-        guard let pending = pendingName else { return nil }
+    func commitName(_ typed: String, for id: UUID? = nil) -> UUID? {
+        guard let pending = pendingName, id == nil || id == pending.id else { return nil }
         pendingName = nil
 
         // The seed's date, not today's. A recording started at 23:58 and named
@@ -512,6 +561,28 @@ final class RecordingSessionModel {
         let enqueued = transcription.enqueue(pending.id)
         lastSaved = SavedRecording(id: pending.id, title: named, enqueued: enqueued)
         return pending.id
+    }
+
+    /// Throws away the recording that was just stopped, instead of naming it —
+    /// for one started by accident.
+    ///
+    /// Only possible while it is still waiting for a name, and that is the
+    /// point: transcription does not start until a name is committed, so a
+    /// recording discarded here never reaches the transcription service and
+    /// costs nothing. It goes to the Trash, not straight to oblivion, so a
+    /// misclick is recoverable.
+    ///
+    /// Clears ``pendingName`` first, which also turns any name commit still in
+    /// flight from the field (see `NameRecordingBanner`) into a no-op.
+    func discardPendingRecording() {
+        guard let pending = pendingName else { return }
+        pendingName = nil
+        library.moveToTrash(id: pending.id)
+        didDiscardRecording = true
+    }
+
+    func dismissDiscardConfirmation() {
+        didDiscardRecording = false
     }
 
     // MARK: - Observing the source
@@ -564,8 +635,9 @@ final class RecordingSessionModel {
                 break
             case .deviceLost:
                 notice = """
-                    The audio input device changed. Recording is paused and everything \
-                    captured so far is safe — resume to continue on the current device.
+                    No audio is coming from any microphone. Recording is paused and \
+                    everything captured so far is safe — it continues by itself as soon \
+                    as a microphone is connected.
                     """
                 Task { await refreshInputDevice() }
             case .interrupted:
@@ -580,6 +652,18 @@ final class RecordingSessionModel {
         case .resumed:
             phase = .recording
             notice = nil
+
+        case .inputDeviceChanged(let name, let isFallback):
+            // The label under the record button names the device in use, so it
+            // follows the switch rather than naming a microphone that is gone.
+            deviceName = name
+            if isFallback {
+                deviceNotice = """
+                    The chosen microphone disconnected, so recording continued from \
+                    \(name ?? "the system default input") in the same file.
+                    """
+            }
+            Task { await refreshInputDevices() }
 
         case .stopped:
             break

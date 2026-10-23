@@ -521,13 +521,13 @@ final class EnrollmentModel {
             case .user:
                 break
             case .deviceLost:
-                notice = "The input device changed, so capture stopped. Start again when ready."
+                notice = "No microphone is available, so capture is paused. It continues when one is connected."
             case .interrupted:
                 notice = "The system interrupted capture. Start again when ready."
             case .writeFailure:
                 notice = "Writing to disk failed. Free some space and start again."
             }
-        case .stopped:
+        case .stopped, .inputDeviceChanged:
             break
         case .failed(let error):
             if notice == nil { notice = Self.describe(error) }
